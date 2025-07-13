@@ -1,0 +1,31 @@
+{
+  "name": "liveplayer-component",
+  "version": "1.0.0",
+  "description": "A robust, framework-agnostic FLV live player component.",
+  "main": "dist/liveplayer.umd.js",
+  "module": "dist/liveplayer.esm.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node build.js",
+    "build:dev": "node build.js --dev"
+  },
+  "peerDependencies": {
+    "flv.js": "^1.6.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.0",
+    "@babel/preset-env": "^7.22.20",
+    "@fortawesome/fontawesome-free": "^6.4.2",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^25.0.7",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-terser": "^0.4.4",
+    "csso": "^5.0.5",
+    "fs-extra": "^11.1.1",
+    "html-minifier-terser": "^7.2.0",
+    "rollup": "^4.1.0",
+    "flv.js": "^1.6.2"
+  }
+}

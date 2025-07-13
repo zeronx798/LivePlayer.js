@@ -1,0 +1,31 @@
+<div class="player-container">
+    <video class="video-element" playsinline></video>
+    <div class="player-overlay loading-overlay" style="display: none;">
+        <i class="fas fa-spinner fa-spin"></i>
+    </div>
+    <div class="player-overlay player-error-overlay" style="display: none;"></div>
+    <div class="controls-container">
+        <div class="controls-left">
+            <button class="control-button play-pause-btn" title="Play/Pause"><i class="fas fa-play"></i><i
+                    class="fas fa-pause"></i></button>
+            <button class="control-button refresh-btn" title="Refresh Stream"><i class="fas fa-sync-alt"></i></button>
+            <div class="unmute-notice" title="Click to unmute"><i class="fas fa-volume-mute"></i> <span>Muted by
+                    browser</span></div>
+        </div>
+        <div class="controls-right">
+            <div class="volume-container">
+                <button class="control-button mute-btn" title="Mute/Unmute"><i class="fas fa-volume-up"></i><i
+                        class="fas fa-volume-mute"></i></button>
+                <input type="range" class="volume-slider" min="0" max="1" step="0.01">
+            </div>
+            <div class="line-switch-container">
+                <button class="control-button line-switch-btn" title="Switch Line"><i class="fas fa-route"></i></button>
+                <ul class="line-switch-menu"></ul>
+            </div>
+            <button class="control-button pip-btn" title="Picture-in-Picture"><i class="fas fa-clone"></i></button>
+            <button class="control-button fullscreen-btn" title="Fullscreen"><i class="fas fa-expand"></i><i
+                    class="fas fa-compress"></i></button>
+        </div>
+    </div>
+</div>
+<!-- Log output will be appended by JS if debug mode is on -->

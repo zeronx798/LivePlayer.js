@@ -1,0 +1,186 @@
+/* liveplayer/liveplayer.css (v7.3) */
+
+/* 组件根容器，由用户在HTML中定义大小 */
+.live-player-component {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+}
+
+/* 播放器主容器，继承父级的大小 */
+.player-container {
+    flex-grow: 1;
+    position: relative;
+    background-color: #000;
+    font-size: 16px; /* 基准字体大小，控件大小会相对变化 */
+    color: #fff;
+    overflow: hidden; /* 隐藏超出边界的子元素，如菜单 */
+    display: flex; /* 使用Flexbox来居中视频 */
+    justify-content: center;
+    align-items: center;
+}
+.player-container.no-cursor { cursor: none; }
+
+/* video元素样式，实现letterbox效果 */
+.video-element {
+    width: 100%;
+    height: 100%;
+    /* 【核心】object-fit: contain 确保视频保持宽高比，多余部分留黑 */
+    object-fit: contain;
+    display: block;
+}
+
+/* 覆盖层通用样式 */
+.player-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    z-index: 20;
+    transition: opacity 0.3s;
+}
+
+.loading-overlay {
+    color: #fff;
+    font-size: 3em;
+}
+
+.player-error-overlay {
+    color: #ffc107;
+    font-size: 1.1em;
+    padding: 20px;
+}
+
+/* 控件容器 */
+.controls-container {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
+    padding: 10px 15px;
+    display: flex; align-items: center; gap: 1em;
+    opacity: 0; visibility: hidden;
+    transition: opacity 0.3s, visibility 0.3s;
+    z-index: 30;
+}
+.player-container:hover .controls-container,
+.player-container.paused .controls-container,
+.controls-container.visible {
+    opacity: 1; visibility: visible;
+}
+
+.controls-left, .controls-right { display: flex; align-items: center; gap: 1.25em; }
+.controls-right { margin-left: auto; }
+
+/* 控件按钮 */
+.control-button {
+    background: none; border: none; color: #fff;
+    font-size: 1.1em; cursor: pointer; padding: 0;
+    transition: color 0.2s, transform 0.2s;
+}
+.control-button:hover { color: #3498db; transform: scale(1.1); }
+
+/* 播放/暂停图标状态 */
+.play-pause-btn .fa-pause { display: none; }
+.player-container.paused .play-pause-btn .fa-play { display: block; }
+.player-container.paused .play-pause-btn .fa-pause { display: none; }
+
+/* 全屏图标状态 */
+.fullscreen-btn .fa-compress { display: none; }
+.player-container.fullscreen .fullscreen-btn .fa-expand { display: none; }
+.player-container.fullscreen .fullscreen-btn .fa-compress { display: block; }
+
+/* 音量容器 */
+.volume-container { display: flex; align-items: center; gap: 0.75em; }
+.volume-slider {
+    -webkit-appearance: none;
+    width: 80px;
+    height: 5px;
+    /* 【修改】将默认轨道颜色放入 CSS 变量，方便覆盖 */
+    --track-color: rgba(255, 255, 255, 0.5);
+    background: var(--track-color);
+    border-radius: 2.5px;
+    outline: none;
+    transition: background-color 0.3s;
+    vertical-align: middle;
+}
+
+/* 【修复】静音图标初始状态 */
+.mute-btn .fa-volume-up { display: none; }
+
+/* 非侵入式静音提示 */
+.unmute-notice {
+    color: #ffc107; font-size: 0.8em;
+    cursor: pointer; background-color: rgba(0,0,0,0.5);
+    padding: 4px 8px; border-radius: 4px;
+    display: none; align-items: center; gap: 5px;
+}
+.unmute-notice.visible { display: flex; }
+
+/* 线路切换菜单 */
+.line-switch-container { position: relative; }
+.line-switch-menu {
+    position: absolute; bottom: 100%; right: 0;
+    background-color: rgba(30, 30, 30, 0.9);
+    list-style: none; padding: 5px 0; margin: 0 0 10px 0;
+    border-radius: 4px; box-shadow: 0 -2px 10px rgba(0,0,0,0.3);
+    opacity: 0; visibility: hidden; transform: translateY(10px);
+    transition: opacity 0.2s, transform 0.2s, visibility 0.2s;
+    z-index: 11;
+}
+.line-switch-menu.visible { opacity: 1; visibility: visible; transform: translateY(0); }
+.line-switch-menu li { padding: 8px 20px; cursor: pointer; white-space: nowrap; }
+.line-switch-menu li:hover { background-color: #3498db; }
+.line-switch-menu li.active { font-weight: bold; color: #3498db; }
+
+/* 日志区域 */
+.log-output {
+    margin-top: 15px;
+    width: 100%;
+    height: 150px;
+    background-color: #242526; border: 1px solid #3a3b3c;
+    border-radius: 4px; color: #b0b3b8;
+    font-family: 'Courier New', Courier, monospace; font-size: 0.8em;
+    padding: 10px; overflow-y: scroll;
+    white-space: pre-wrap; resize: vertical;
+    flex-shrink: 0; /* 防止它在空间不足时被压缩 */
+}
+
+.volume-container {
+    display: flex;
+    align-items: center;
+    gap: 0.75em;
+    /* 【新增】为颜色变化添加平滑过渡 */
+    transition: filter 0.2s;
+}
+
+/* 【新增】当音量容器有 .muted 类时，将其下所有元素变为灰色 */
+.volume-container.muted .volume-slider {
+    background: #555; /* 将轨道颜色变为灰色 */
+}
+
+.volume-container.muted .volume-slider::-webkit-slider-thumb {
+    background: #999; /* 将滑块颜色也变为灰色 */
+}
+.volume-container.muted .volume-slider::-moz-range-thumb {
+    background: #999;
+}
+
+
+.volume-slider {
+    -webkit-appearance: none;
+    width: 80px;
+    height: 5px;
+    /* 【修改】将默认轨道颜色放入 CSS 变量，方便覆盖 */
+    --track-color: rgba(255, 255, 255, 0.5);
+    background: var(--track-color);
+    border-radius: 2.5px;
+    outline: none;
+    transition: background-color 0.3s;
+    vertical-align: middle;
+}
