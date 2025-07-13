@@ -5,6 +5,7 @@
  */
 
 import flvjs from 'flv.js';
+import Hls from 'hls.js';
 
 /**
  * Represents a configurable FLV live player component.
@@ -15,7 +16,8 @@ export default class LivePlayer {
      * Creates an instance of LivePlayer.
      * @param {HTMLElement} element The container element where the player will be injected.
      * @param {object} [options={}] Configuration options for the player.
-     * @param {object} [options.streamUrls={}] An object where keys are line names (e.g., "主线路") and values are FLV stream URLs.
+     * @param {object} [options.streamUrls={}] An object of stream sources. Can be in simple format ('Line': 'url')
+     * or advanced format with fallback ('Line': { url: 'primary.flv', fallback: 'fallback.m3u8' }).
      * @param {('debug'|'info'|'prod')} [options.logLevel='prod'] The logging level. 'debug' shows all logs, 'info' shows informational and error logs, 'prod' shows only critical errors.
      * @param {boolean} [options.debugUI=false] If true, a debug log textarea will be displayed below the player.
      * @param {object} [options.liveEdge] Configuration for maintaining playback near the live edge.
@@ -36,7 +38,11 @@ export default class LivePlayer {
             liveEdge: {
                 enabled: false,
                 interval: 120000,
-                latency: 20.0
+                latency: 20.0,
+                hlsConfig: {
+                    liveSyncDurationCount: 3,
+                    liveMaxLatencyDurationCount: 5,
+                }
             }
         };
 
@@ -53,6 +59,10 @@ export default class LivePlayer {
         // --- Internal State ---
         /** @type {flvjs.Player | null} The flv.js player instance. */
         this.flvPlayer = null;
+        /** @type {Hls | null} The hls.js player instance. */
+        this.hlsPlayer = null;
+        /** @type {'flv' | 'hls' | null} The type of the current active player. */
+        this.currentPlayerType = null;
         /** @type {string | null} The URL of the currently playing stream. */
         this.currentUrl = null;
         /** @type {boolean} Tracks if the user has interacted with the player. */
@@ -91,14 +101,11 @@ export default class LivePlayer {
      */
     start() {
         this.log('Player instance starting...', 'info');
-        if (flvjs.isSupported()) {
-            if (this.streamUrlList.length > 0) {
-                this.setupPlayer(this.streamUrlList[0].url, 'initial load');
-            } else {
-                this.displayError('No stream sources provided to start.');
-            }
+        if (this.streamUrlList.length > 0) {
+            // setupPlayer 现在是智能的，直接调用即可
+            this.setupPlayer(this.streamUrlList[0].url, 'initial load');
         } else {
-            this.displayError('FLV playback is not supported in this browser.');
+            this.displayError('No stream sources provided to start.');
         }
     }
 
@@ -111,27 +118,50 @@ export default class LivePlayer {
             this.flvPlayer.destroy();
             this.flvPlayer = null;
         }
+        if (this.hlsPlayer) {
+            this.hlsPlayer.destroy();
+            this.hlsPlayer = null;
+        }
         if (this.latencyChecker) {
             clearInterval(this.latencyChecker);
         }
         this.container.innerHTML = '';
+        this.currentPlayerType = null;
     }
 
     /**
-     * Parses the stream URLs object into a more usable array format.
+     * Parses the stream URLs object into a normalized array format.
+     * It handles both simple ('name': 'url') and advanced ('name': {url: '...', fallback: '...'}) formats.
      * @private
      * @param {object} urlsObject - The stream URLs object from options.
-     * @returns {Array<{name: string, url: string}>} An array of stream objects.
-     * @throws {Error} If the input is not a valid, non-empty object.
+     * @returns {Array<{name: string, url: string, fallback: string | null}>} An array of normalized stream objects.
+     * @throws {Error} If the input is not a valid, non-empty object or contains no valid entries.
      */
     parseStreamUrls(urlsObject) {
         this.log('Parsing stream URLs from options...', 'debug');
         if (typeof urlsObject !== 'object' || urlsObject === null || Array.isArray(urlsObject)) {
-            throw new Error('streamUrls option must be an object (associative array).');
+            throw new Error('streamUrls option must be a non-empty object.');
         }
-        const urls = Object.entries(urlsObject).map(([name, url]) => ({ name, url }));
-        if (urls.length === 0) throw new Error('streamUrls object is empty.');
-        this.log(`Successfully parsed ${urls.length} lines.`, 'debug', { parsedData: urlsObject });
+
+        const urls = Object.entries(urlsObject).map(([name, value]) => {
+            if (typeof value === 'string') {
+                // Simple format
+                return { name, url: value, fallback: null };
+            } else if (typeof value === 'object' && value !== null && value.url) {
+                // Advanced format with fallback
+                return { name, url: value.url, fallback: value.fallback || null };
+            } else {
+                // Invalid format for this entry
+                this.log(`Invalid stream format for line: "${name}". Entry skipped.`, 'warn', { entry: value });
+                return null;
+            }
+        }).filter(Boolean); // Filter out any null (invalid) entries
+
+        if (urls.length === 0) {
+            throw new Error('streamUrls object is empty or contains no valid entries.');
+        }
+
+        this.log(`Successfully parsed ${urls.length} lines.`, 'debug', { parsedData: urls });
         return urls;
     }
 
@@ -174,9 +204,12 @@ export default class LivePlayer {
         this.lineSwitchMenu = this.container.querySelector(".line-switch-menu");
         this.pipBtn = this.container.querySelector(".pip-btn");
         this.fullscreenBtn = this.container.querySelector(".fullscreen-btn");
+        // 该方法主体不变，仅需确认此处使用的 `this.streamUrlList` 已经是新格式
+        // 并且 `li.dataset.url = line.url` 的行为是正确的（它应该始终指向主URL）
         this.streamUrlList.forEach((line, index) => {
             const li = document.createElement("li");
             li.textContent = line.name;
+            // 确保使用标准化的 `url` 属性
             li.dataset.url = line.url;
             if (index === 0) li.classList.add("active");
             this.lineSwitchMenu.appendChild(li);
@@ -322,23 +355,82 @@ export default class LivePlayer {
     }
 
     /**
-     * Sets up or re-initializes the flv.js player for a given URL.
+     * The central player setup dispatcher. It determines the effective stream URL based on browser
+     * capabilities and the provided fallback options, then calls the appropriate setup method.
      * @private
-     * @param {string} url - The FLV stream URL to play.
+     * @param {string} targetUrl - The user-selected, primary stream URL.
      * @param {string} [reason="unknown"] - The reason for this setup call (for logging).
      */
-    setupPlayer(url, reason = "unknown") {
-        this.log(`Setting up player triggered by: ${reason}`, "info", { url });
-        if (!url) {
-            this.displayError("Setup failed: URL is invalid.");
+    setupPlayer(targetUrl, reason = "unknown") {
+        this.log(`Setup requested for: ${targetUrl}, Reason: ${reason}`, "info");
+
+        if (!targetUrl) {
+            this.displayError("Setup failed: Target URL is invalid.");
             return;
         }
+
+        // --- 核心回退逻辑 ---
+        let urlToPlay = targetUrl;
+        const lineInfo = this.streamUrlList.find(line => line.url === targetUrl);
+
+        if (targetUrl.endsWith('.flv') && !flvjs.isSupported()) {
+            this.log(`FLV stream selected, but flv.js is not supported.`, 'warn');
+            if (lineInfo && lineInfo.fallback) {
+                urlToPlay = lineInfo.fallback;
+                this.log(`Switching to fallback URL: ${urlToPlay}`, 'info');
+            } else {
+                const errorMsg = 'FLV is not supported and no fallback HLS stream is available for this line.';
+                this.displayError(errorMsg);
+                this.log(errorMsg, 'error');
+                return;
+            }
+        }
+
+        // --- 统一的准备和清理工作 ---
         this.isLoading = true;
         this.loadingOverlay.style.display = "flex";
         if (this.errorOverlay) this.errorOverlay.style.display = "none";
-        if (this.flvPlayer) this.flvPlayer.destroy();
-        this.currentUrl = url;
-        this.updateActiveLineUI(url);
+
+        if (this.flvPlayer) { this.flvPlayer.destroy(); this.flvPlayer = null; }
+        if (this.hlsPlayer) { this.hlsPlayer.destroy(); this.hlsPlayer = null; }
+        this.video.src = '';
+        this.video.removeAttribute('src');
+
+        this.currentUrl = urlToPlay;
+        this.updateActiveLineUI(targetUrl); // UI高亮用户选择的主线路
+
+        // --- 根据最终要播放的URL进行调度 ---
+        if (urlToPlay.endsWith('.m3u8')) {
+            this.currentPlayerType = 'hls';
+            this.setupHlsPlayer(urlToPlay, reason);
+        } else if (urlToPlay.endsWith('.flv')) {
+            this.currentPlayerType = 'flv';
+            this.setupFlvPlayer(urlToPlay, reason);
+        } else {
+            const errorMsg = `Unsupported stream format for URL: ${urlToPlay}`;
+            this.displayError(errorMsg);
+            this.log(errorMsg, 'error');
+            this.isLoading = false;
+            this.loadingOverlay.style.display = "none";
+        }
+    }
+
+    /**
+     * Sets up the flv.js player instance for a given FLV stream URL. This method
+     * is only called if flv.js is supported by the browser.
+     * @private
+     * @param {string} url - The FLV stream URL to play.
+     * @param {string} reason - The reason for this setup call (for logging).
+     */
+    setupFlvPlayer(url, reason) {
+        // 这个检查是多余的，因为在 setupPlayer 中已经检查过了，但保留也无妨，更安全
+        if (!flvjs.isSupported()) {
+            this.displayError('FLV playback is not supported in this browser.');
+            this.log('flv.js is not supported, cannot play FLV stream.', 'error');
+            return;
+        }
+
+        this.log(`Initializing flv.js for: ${url}`, 'debug');
 
         this.flvPlayer = flvjs.createPlayer({
             type: "flv",
@@ -350,36 +442,106 @@ export default class LivePlayer {
 
         this.flvPlayer.attachMediaElement(this.video);
         this.flvPlayer.load();
-        this.video.muted = !this.userInteracted;
-        const playPromise = this.video.play();
-        if (playPromise) {
-            playPromise
-                .catch((e) => this.log(`Autoplay failed: ${e.message}`, "warn"))
-                .finally(() => {
-                    this.isLoading = false;
-                    this.loadingOverlay.style.display = "none";
-                    this.updateAllUI();
-                    if (this.options.liveEdge.enabled) this.startLatencyMonitor();
-                });
-        } else {
-            this.isLoading = false;
-            this.loadingOverlay.style.display = "none";
-            this.updateAllUI();
-            if (this.options.liveEdge.enabled) this.startLatencyMonitor();
-        }
+
         this.flvPlayer.on(flvjs.Events.ERROR, (type, detail) => {
-            this.log(`Runtime error: ${type}`, "error", detail);
+            this.log(`flv.js runtime error: ${type}`, "error", detail);
             if (type === flvjs.ErrorTypes.NETWORK_ERROR) {
                 setTimeout(() => {
                     if (url === this.currentUrl)
+                        // 注意：这里调用主 setupPlayer 进行重试，而不是直接调用 setupFlvPlayer
                         this.setupPlayer(this.currentUrl, "network recovery");
                 }, 2000);
             }
         });
+
         this.flvPlayer.on(flvjs.Events.METADATA_ARRIVED, () => {
-            this.log("Stream connected!", "info");
+            this.log("FLV stream connected!", "info");
             this.loadingOverlay.style.display = "none";
         });
+
+        this.commonPlayLogic();
+    }
+
+    /**
+     * Sets up the HLS player, attempting to use the browser's native HLS support first
+     * (e.g., on Safari) and falling back to hls.js if necessary.
+     * @private
+     * @param {string} url - The HLS (.m3u8) stream URL to play.
+     * @param {string} reason - The reason for this setup call (for logging).
+     */
+    setupHlsPlayer(url, reason) {
+        if (this.video.canPlayType('application/vnd.apple.mpegurl')) { // 原生HLS
+            this.log(`Using native HLS playback for: ${url}`, 'info');
+            this.video.src = url;
+            this.video.addEventListener('loadedmetadata', () => {
+                this.log('Native HLS stream metadata loaded.', 'info');
+                this.loadingOverlay.style.display = 'none';
+            }, { once: true }); // 使用 once 选项避免重复绑定
+            this.commonPlayLogic();
+        } else if (Hls.isSupported()) { // hls.js
+            this.log(`Using hls.js for playback: ${url}`, 'info');
+            const hlsConfig = this.options.liveEdge.hlsConfig || {};
+            this.hlsPlayer = new Hls(hlsConfig);
+            this.hlsPlayer.loadSource(url);
+            this.hlsPlayer.attachMedia(this.video);
+
+            this.hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
+                this.log('hls.js manifest parsed, stream ready.', 'info');
+                this.loadingOverlay.style.display = 'none';
+            });
+
+            this.hlsPlayer.on(Hls.Events.ERROR, (event, data) => {
+                this.log(`hls.js error: ${data.type} - ${data.details}`, 'error', data);
+                if (data.fatal) {
+                    switch (data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            this.log('Fatal network error, attempting to recover...', 'warn');
+                            this.hlsPlayer.startLoad();
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            this.log('Fatal media error, attempting to recover...', 'warn');
+                            this.hlsPlayer.recoverMediaError();
+                            break;
+                        default:
+                            this.setupPlayer(this.currentUrl, "hls.js fatal error recovery");
+                            break;
+                    }
+                }
+            });
+
+            this.commonPlayLogic();
+        } else {
+            this.displayError('HLS playback is not supported in this browser.');
+            this.log('Neither native HLS nor hls.js are supported.', 'error');
+        }
+    }
+
+    /**
+     * Encapsulates the common logic for initiating video playback. It handles the play promise,
+     * updates the UI state, and starts the latency monitor for FLV streams.
+     * @private
+     */
+    commonPlayLogic() {
+        this.video.muted = !this.userInteracted;
+        const playPromise = this.video.play();
+
+        if (playPromise !== undefined) {
+            playPromise
+                .catch((e) => {
+                    this.log(`Autoplay was prevented: ${e.message}`, "warn");
+                    this.updateAllUI();
+                })
+                .finally(() => {
+                    this.isLoading = false;
+                    this.updateAllUI();
+                    if (this.currentPlayerType === 'flv' && this.options.liveEdge.enabled) {
+                        this.startLatencyMonitor();
+                    } else if (this.latencyChecker) { // 如果从FLV切换到HLS，停止旧的延迟检查
+                        clearInterval(this.latencyChecker);
+                        this.latencyChecker = null;
+                    }
+                });
+        }
     }
 
     /** Updates all UI components to reflect the current state. @private */
@@ -488,7 +650,7 @@ export default class LivePlayer {
         const latency = bufferedEnd - this.video.currentTime;
 
         if (latency > this.options.liveEdge.latency) {
-            this.log(`Latency (${latency.toFixed(2)}s) is greater than ${LATENCY_THRESHOLD}s. Seeking to live edge.`, 'info');
+            this.log(`Latency (${latency.toFixed(2)}s) is greater than ${this.options.liveEdge.latency}s. Seeking to live edge.`, 'info');
             // 原有的seek代码
             if (this.video.buffered.length > 0) {
                 // --- MODIFIED: 在寻址前显示加载动画 ---
