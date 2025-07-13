@@ -31,28 +31,47 @@ export default class LivePlayer {
         this.container = element;
         this.id = this.container.id || `liveplayer-${Math.random().toString(36).substr(2, 9)}`;
 
+        // --- MODIFIED: Integrate robust HLS settings into defaultOptions ---
         const defaultOptions = {
             streamUrls: {},
             logLevel: 'prod',
             debugUI: false,
             liveEdge: {
-                enabled: false,
+                enabled: false, // This is for our custom FLV latency checker
                 interval: 120000,
                 latency: 20.0,
+
+                // --- NEW: Centralized and robust hls.js default configuration ---
                 hlsConfig: {
-                    liveSyncDurationCount: 3,
-                    liveMaxLatencyDurationCount: 5,
+                    // Latency and sync controls
+                    liveSyncDurationCount: 3,       // Try to stay 3 segments from the live edge
+                    liveMaxLatencyDurationCount: 5, // If latency exceeds 5 segments, hls.js will speed up or seek
+
+                    // Robustness and retry strategy
+                    manifestLoadErrorMaxRetry: 5,   // Retry manifest loading 5 times
+                    manifestLoadErrorRetryDelay: 1000, // 1s delay between manifest retries
+                    levelLoadErrorMaxRetry: 5,      // Retry playlist/segment loading 5 times
+                    levelLoadErrorRetryDelay: 1000, // 1s delay between segment retries
+
+                    // Error recovery
+                    maxBufferHole: 2.0, // Allow seeking over a 2-second gap in the buffer
                 }
             }
         };
 
-        // 深层合并用户传入的 options 和默认值
+        // --- MODIFIED: Deep merge user options over the new defaults ---
+        // The deep merge logic needs to correctly handle the nested hlsConfig object.
         this.options = {
             ...defaultOptions,
             ...options,
             liveEdge: {
                 ...defaultOptions.liveEdge,
-                ...(options.liveEdge || {})
+                ...(options.liveEdge || {}),
+                // Ensure hlsConfig is also merged, not just replaced
+                hlsConfig: {
+                    ...defaultOptions.liveEdge.hlsConfig,
+                    ...((options.liveEdge && options.liveEdge.hlsConfig) || {})
+                }
             }
         };
 
@@ -672,17 +691,34 @@ export default class LivePlayer {
         }
     }
 
-    /** Handles browser tab visibility changes. @private */
+    /**
+     * Handles browser tab visibility changes to ensure continuous playback.
+     * When the tab becomes hidden, it does nothing to interrupt playback.
+     * When the tab becomes visible again, it checks for latency and seeks to the live edge if needed.
+     * @private
+     */
     handleVisibilityChange() {
         if (document.hidden) {
-            // this.wasMutedBeforeHidden = this.video.muted;
-            // this.video.muted = true;
-            this.log('Tab is hidden, playback continues in background.', 'info');
+            // --- 关键：当页面隐藏时，我们什么都不做 ---
+            // 不要暂停视频，不要静音，让它继续尝试播放。
+            // 浏览器自身的节流机制仍然会起作用，但我们不主动干预。
+            this.log('Tab is now hidden, attempting to continue playback in the background.', 'info');
         } else {
-            // if (!this.wasMutedBeforeHidden) this.video.muted = false;
-            // if (this.video.paused) this.togglePlay();
-            this.log('Tab is visible again, seeking to live edge.', 'info');
-            this.seekToLiveEdge();
+            // --- 当页面恢复可见时 ---
+            this.log('Tab is visible again.', 'info');
+
+            // 1. 检查视频是否意外暂停了
+            if (this.video.paused && this.userInteracted) {
+                this.log('Video was paused in background, attempting to resume.', 'warn');
+                this.video.play().catch(e => this.log(`Error resuming playback: ${e.message}`, 'error'));
+            }
+
+            // 2. 检查延迟，因为后台播放可能会导致延迟累积
+            // 延迟一下再检查，给播放器一点时间恢复状态
+            setTimeout(() => {
+                this.log('Checking latency after returning from background...', 'info');
+                this.seekToLiveEdge();
+            }, 1000); // 1秒后检查
         }
     }
 
