@@ -309,8 +309,7 @@ export default class LivePlayer {
         document.addEventListener("visibilitychange", () =>
             this.handleVisibilityChange()
         );
-        // --- NEW: 添加 seeked 事件监听器 ---
-        // 当视频完成寻址操作后，隐藏加载动画。
+        // 添加 seeked 事件监听器。当视频完成寻址操作后，隐藏加载动画。
         // 这适用于所有寻址场景，包括我们主动追赶进度。
         this.video.addEventListener('seeked', () => {
             this.log('Video seek completed.', 'debug');
@@ -318,7 +317,14 @@ export default class LivePlayer {
                 this.loadingOverlay.style.display = 'none';
             }
         });
-        // --- NEW CODE END ---
+        // This is now the PRIMARY and sole trigger for hiding the overlay
+        // when playback successfully starts, preventing premature hiding.
+        this.video.addEventListener('playing', () => {
+            this.log('Video playback has started. Hiding loading overlay.', 'debug');
+            if (this.loadingOverlay) {
+                this.loadingOverlay.style.display = 'none';
+            }
+        });
     }
 
     /**
@@ -475,7 +481,6 @@ export default class LivePlayer {
 
         this.flvPlayer.on(flvjs.Events.METADATA_ARRIVED, () => {
             this.log("FLV stream connected!", "info");
-            this.loadingOverlay.style.display = "none";
         });
 
         this.commonPlayLogic();
@@ -494,7 +499,6 @@ export default class LivePlayer {
             this.video.src = url;
             this.video.addEventListener('loadedmetadata', () => {
                 this.log('Native HLS stream metadata loaded.', 'info');
-                this.loadingOverlay.style.display = 'none';
             }, { once: true }); // 使用 once 选项避免重复绑定
             this.commonPlayLogic();
         } else if (Hls.isSupported()) { // hls.js
@@ -506,7 +510,6 @@ export default class LivePlayer {
 
             this.hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
                 this.log('hls.js manifest parsed, stream ready.', 'info');
-                this.loadingOverlay.style.display = 'none';
             });
 
             this.hlsPlayer.on(Hls.Events.ERROR, (event, data) => {
@@ -548,6 +551,11 @@ export default class LivePlayer {
             playPromise
                 .catch((e) => {
                     this.log(`Autoplay was prevented: ${e.message}`, "warn");
+                    // If autoplay fails, hide the loading overlay so the user can see
+                    // the play button and manually start the video.
+                    if (this.loadingOverlay) {
+                        this.loadingOverlay.style.display = 'none';
+                    }
                     this.updateAllUI();
                 })
                 .finally(() => {
