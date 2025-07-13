@@ -1,7 +1,7 @@
 /**
  * @file liveplayer.js
- * @description A self-contained, zero-dependency, robust, and configurable FLV live player component.
- * @version 7.5.1 (Patched & Fully Documented)
+ * @description A self-contained, zero-dependency and configurable FLV and HLS live player component.
+ * @version 1.0.0-SNAPSHOT
  */
 
 import flvjs from 'flv.js';

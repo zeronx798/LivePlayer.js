@@ -43,7 +43,7 @@ async function build() {
         // 3. 【核心修复】Rollup 配置
         const inputOptions = {
             input: tempJsPath,
-            external: ['flv.js'], // 告诉 Rollup 不要打包 flv.js
+            external: ['flv.js', 'hls.js'], // 告诉 Rollup 不要打包 flv.js 和 hls.js
             plugins: [
                 nodeResolve(), // 帮助 Rollup 查找 node_modules 中的包
                 commonjs(),    // 将 CommonJS 模块（如某些依赖）转换为 ES6
@@ -58,17 +58,18 @@ async function build() {
             file: path.join(distDir, 'liveplayer.umd.js'),
             format: 'umd',
             name: 'LivePlayer',
-            banner: `/** simple-flv-player v3.0.0 */`,
+            banner: `/** simple-live-player v1.0.0 */`,
             sourcemap: true,
             globals: {
-                'flv.js': 'flvjs' // 'npm包名': '全局变量名'
+                'flv.js': 'flvjs', // 'npm包名': '全局变量名'
+                'hls.js': 'Hls'    // 'npm包名': '全局变量名'
             }
         };
 
         const esmOutputOptions = {
             file: path.join(distDir, 'liveplayer.esm.js'),
             format: 'esm',
-            banner: `/** simple-flv-player v3.0.0 */`,
+            banner: `/** simple-live-player v1.0.0 */`,
             sourcemap: true
         };
 
