@@ -96,6 +96,20 @@ export default class LivePlayer {
         this.wasMutedBeforeHidden = false;
         /** @type {number | null} Interval ID for the latency checker. */
         this.latencyChecker = null;
+        /** @type {number | null} Interval ID for the offline poller. */
+        this.offlinePoller = null;
+        /** @type {number} Delay in ms for a polling retry when offline. */
+        this.offlinePollInterval = 5000; // (5 seconds)
+        /** 
+         * @private 
+         * @type {number} Counts consecutive 404 errors during playback. 
+         */
+        this.consecutive404s = 0;
+        /** 
+         * @private 
+         * @type {number} The number of 404s to tolerate before declaring stream offline.
+         */
+        this.maxConsecutive404s = 5; // Retry 5 times
 
         /** @private */
         this.logLevelMap = { 'debug': 0, 'info': 1, 'prod': 2, 'error': 2 };
@@ -207,6 +221,7 @@ export default class LivePlayer {
         this.errorOverlay = this.container.querySelector(
             ".player-error-overlay"
         );
+        this.offlineOverlay = this.container.querySelector(".player-offline-overlay");
         this.loadingOverlay = this.container.querySelector(".loading-overlay");
         // FIX: Use this.options.debugUI instead of undefined this.isDebugUI
         if (this.options.debugUI) {
@@ -324,6 +339,9 @@ export default class LivePlayer {
             if (this.loadingOverlay) {
                 this.loadingOverlay.style.display = 'none';
             }
+            // A successful playback start means the stream is healthy.
+            // Reset the consecutive 404 counter.
+            this.consecutive404s = 0;
         });
     }
 
@@ -393,6 +411,10 @@ export default class LivePlayer {
             this.displayError("Setup failed: Target URL is invalid.");
             return;
         }
+
+        // Reset the offline state before any new setup attempt. This clears
+        // the offline message and stops the polling timer if it's running.
+        this.clearOfflineState();
 
         // --- 核心回退逻辑 ---
         let urlToPlay = targetUrl;
@@ -468,8 +490,26 @@ export default class LivePlayer {
         this.flvPlayer.attachMediaElement(this.video);
         this.flvPlayer.load();
 
-        this.flvPlayer.on(flvjs.Events.ERROR, (type, detail) => {
-            this.log(`flv.js runtime error: ${type}`, "error", detail);
+        this.flvPlayer.on(flvjs.Events.ERROR, (errorType, errorDetail, errorInfo) => {
+            this.log(`flv.js runtime error: ${errorType}`, "error", { errorDetail, errorInfo });
+
+            const httpStatus = errorInfo && errorInfo.code;
+            if (errorType === flvjs.ErrorTypes.NETWORK_ERROR && httpStatus === 404) {
+                this.consecutive404s++;
+                this.log(`FLV 404 error detected. Count: ${this.consecutive404s}`, 'warn');
+
+                if (this.consecutive404s >= this.maxConsecutive404s) {
+                    this.log('Consecutive FLV 404 threshold reached. Declaring stream offline.', 'error');
+                    if (this.loadingOverlay) this.loadingOverlay.style.display = 'none';
+                    if (this.offlineOverlay) this.offlineOverlay.style.display = 'flex';
+                    this.handleOfflineState();
+                } else {
+                    this.log('Tolerating FLV 404 error, attempting a quick reconnect...', 'info');
+                    setTimeout(() => this.setupPlayer(this.currentUrl, 'flv-404-recovery'), 1500);
+                }
+                return;
+            }
+
             if (type === flvjs.ErrorTypes.NETWORK_ERROR) {
                 setTimeout(() => {
                     if (url === this.currentUrl)
@@ -514,6 +554,25 @@ export default class LivePlayer {
 
             this.hlsPlayer.on(Hls.Events.ERROR, (event, data) => {
                 this.log(`hls.js error: ${data.type} - ${data.details}`, 'error', data);
+
+                // This condition now catches 404s on manifest, playlist, or fragments.
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR && data.response && data.response.code === 404) {
+                    this.consecutive404s++;
+                    this.log(`HLS 404 error detected. Count: ${this.consecutive404s}`, 'warn');
+
+                    if (this.consecutive404s >= this.maxConsecutive404s) {
+                        this.log('Consecutive HLS 404 threshold reached. Declaring stream offline.', 'error');
+                        if (this.loadingOverlay) this.loadingOverlay.style.display = 'none';
+                        if (this.offlineOverlay) this.offlineOverlay.style.display = 'flex';
+                        this.handleOfflineState();
+                    } else {
+                        this.log('Tolerating HLS 404 error, attempting a quick reconnect...', 'info');
+                        setTimeout(() => this.setupPlayer(this.currentUrl, 'hls-404-recovery'), 1500);
+                    }
+                    return;
+                }
+
+                // Existing fatal error recovery logic
                 if (data.fatal) {
                     switch (data.type) {
                         case Hls.ErrorTypes.NETWORK_ERROR:
@@ -551,11 +610,9 @@ export default class LivePlayer {
             playPromise
                 .catch((e) => {
                     this.log(`Autoplay was prevented: ${e.message}`, "warn");
-                    // If autoplay fails, hide the loading overlay so the user can see
-                    // the play button and manually start the video.
-                    if (this.loadingOverlay) {
-                        this.loadingOverlay.style.display = 'none';
-                    }
+                    // We DO NOT hide the loading overlay here. If autoplay is prevented,
+                    // the loading overlay should remain visible until the user clicks to play,
+                    // or until a stream error (like 404) is definitively handled.
                     this.updateAllUI();
                 })
                 .finally(() => {
@@ -767,4 +824,70 @@ export default class LivePlayer {
         if (!this.video.paused && this.controls)
             this.controls.classList.remove("visible");
     }
+
+    /**
+     * Handles the "stream offline" scenario. It now initiates a silent polling
+     * mechanism using fetch() that does not interfere with the UI until the
+     * stream is confirmed to be back online.
+     * @private
+     */
+    handleOfflineState() {
+        // Ensure any previous poller is stopped before starting a new one.
+        if (this.offlinePoller) {
+            clearInterval(this.offlinePoller);
+        }
+
+        // Start polling silently in the background.
+        this.offlinePoller = setInterval(async () => {
+            this.log('Polling for live stream silently...', 'debug');
+
+            // Find the original, user-intended URL to check.
+            const originalUrl = this.streamUrlList.find(line =>
+                line.url === this.currentUrl || line.fallback === this.currentUrl
+            )?.url;
+
+            if (!originalUrl) {
+                this.log('Could not find original URL to poll, stopping poller.', 'error');
+                this.clearOfflineState();
+                return;
+            }
+
+            try {
+                // Use a HEAD request for efficiency - we only need headers and status, not the body.
+                // 'no-cache' ensures we get a fresh response from the server.
+                const response = await fetch(originalUrl, { method: 'HEAD', cache: 'no-cache' });
+
+                // response.ok is true for HTTP status codes 200-299.
+                if (response.ok) {
+                    this.log('Stream is back online! Re-initializing player.', 'info');
+                    // IMPORTANT: Stop the poller first, then trigger the main setup process.
+                    this.clearOfflineState();
+                    this.setupPlayer(originalUrl, 'offline-poll-success');
+                } else {
+                    // Stream is still offline (e.g., 404). Do nothing to the UI and wait for the next poll.
+                    this.log(`Poll check: Stream still offline with status ${response.status}`, 'debug');
+                }
+            } catch (error) {
+                // A network error occurred during the poll (e.g., DNS, CORS, no internet).
+                // Do nothing to the UI and wait for the next poll.
+                this.log('Poll check: Network error.', 'warn');
+            }
+        }, this.offlinePollInterval);
+    }
+
+    /**
+     * Clears any "stream offline" state, hiding the overlay and stopping the poller.
+     * This is called at the beginning of every `setupPlayer` call.
+     * @private
+     */
+    clearOfflineState() {
+        if (this.offlinePoller) {
+            clearInterval(this.offlinePoller);
+            this.offlinePoller = null;
+        }
+        if (this.offlineOverlay) {
+            this.offlineOverlay.style.display = 'none';
+        }
+    }
+
 }
