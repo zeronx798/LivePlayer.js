@@ -453,6 +453,10 @@ export default class LivePlayer {
             this.userSelectedUrl = targetUrl;
         }
 
+        // --- FIX: Reset stale content cache on every new setup ---
+        // This prevents state from a previously failed stream from polluting the new one.
+        this.lastKnownStaleContent = null;
+
         if (!targetUrl) {
             this.displayError("Setup failed: Target URL is invalid.");
             return;
@@ -1020,31 +1024,38 @@ export default class LivePlayer {
 
             const mediaPlaylistUrl = this.hlsPlayer.levels[this.hlsPlayer.currentLevel].url;
             const MAX_CHECKS = 3;
-            // Shorter interval for faster feedback
-            const CHECK_INTERVAL = 2500;
-            let lastContent = '';
+            const CHECK_INTERVAL = 1500;
+            let lastFetchedRawContent = ''; // Store the raw content of the playlist for the final cache
 
             for (let i = 1; i <= MAX_CHECKS; i++) {
-                // If the lock was released by another process (e.g. successful 'playing' event), abort.
                 if (!this.isObservingStall) {
                     this.log('HLS investigation was cancelled externally.', 'info');
-                    return; // Exit the investigation
+                    return; // Investigation cancelled
                 }
 
                 try {
                     const response = await fetch(mediaPlaylistUrl, { cache: 'no-cache' });
                     if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
-                    const currentContent = await response.text();
+                    const currentFetchedRawContent = await response.text();
 
-                    if (i > 0 && lastContent && currentContent !== lastContent) {
-                        // SUCCESS: Stream is alive and updated.
-                        this.log(`HLS media playlist updated on check ${i}/${MAX_CHECKS}. Stream is healthy.`, 'info');
-                        this.recoveryAttempts = 0; // Reset main counter
-                        // The 'finally' block will release the lock.
-                        return;
+                    // On the second check and onwards, compare the new playlist with the last one
+                    if (i > 1) {
+                        // --- FIX: Compare NORMALIZED content to defeat caching issues ---
+                        const lastNormalized = this.normalizeM3u8Content(lastFetchedRawContent);
+                        const currentNormalized = this.normalizeM3u8Content(currentFetchedRawContent);
+
+                        if (currentNormalized !== lastNormalized) {
+                            // SUCCESS: The playlist content has actually changed. The stream is alive.
+                            this.log(`HLS media playlist updated on check ${i}/${MAX_CHECKS}. Stream is healthy.`, 'info');
+                            this.recoveryAttempts = 0; // Reset main error counter
+                            return; // Exit the investigation successfully
+                        }
                     }
-                    lastContent = currentContent;
+
+                    // For the next loop, the "current" content becomes the "last" content
+                    lastFetchedRawContent = currentFetchedRawContent;
                     this.log(`HLS investigation check ${i}/${MAX_CHECKS}: Playlist is stale.`, 'debug');
+
                 } catch (error) {
                     this.log(`Network error during HLS investigation check ${i}/${MAX_CHECKS}: ${error.message}.`, 'warn');
                 }
@@ -1052,11 +1063,11 @@ export default class LivePlayer {
                 if (i < MAX_CHECKS) await new Promise(resolve => setTimeout(resolve, CHECK_INTERVAL));
             }
 
-            // FAILURE: All checks completed, and the playlist is still stale.
+            // FAILURE: All checks completed, and the normalized playlist never changed.
             this.log(`HLS stream failed ${MAX_CHECKS} consecutive checks. Declaring stream offline.`, 'error');
-            // Before declaring offline, CACHE the content of the stale playlist.
-            this.lastKnownStaleContent = lastContent;
-            this.recoveryAttempts = this.maxRecoveryAttempts;
+            // Cache the raw content of the stale playlist we last fetched.
+            this.lastKnownStaleContent = lastFetchedRawContent;
+            this.recoveryAttempts = this.maxRecoveryAttempts; // Set to max to trigger offline declaration
             this.handleStreamError('hls-investigation-failed');
 
         } catch (error) {
@@ -1064,8 +1075,7 @@ export default class LivePlayer {
             this.log(`HLS investigation could not start: ${error.message}`, 'error');
             this.handleStreamError('hls-investigation-setup-failed');
         } finally {
-            // CRUCIAL: ALWAYS release the lock when the investigation is over,
-            // no matter how it exits (success, failure, or unexpected error).
+            // CRUCIAL: ALWAYS release the lock when the investigation is over.
             this.log('HLS investigation finished. Releasing lock.', 'debug');
             this.isObservingStall = false;
         }
