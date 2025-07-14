@@ -102,14 +102,36 @@ export default class LivePlayer {
         this.offlinePollInterval = 5000; // (5 seconds)
         /** 
          * @private 
-         * @type {number} Counts consecutive 404 errors during playback. 
+         * @type {number} Counts consecutive recovery attempts for断流. 
          */
-        this.consecutive404s = 0;
+        this.recoveryAttempts = 0;
         /** 
          * @private 
-         * @type {number} The number of 404s to tolerate before declaring stream offline.
+         * @type {number} The number of attempts to tolerate before declaring stream offline.
          */
-        this.maxConsecutive404s = 5; // Retry 5 times
+        this.maxRecoveryAttempts = 3;
+        /** @type {string | null} The URL of the currently playing stream. */
+        this.currentUrl = null;
+        /** 
+         * @private
+         * @type {string | null} The primary URL selected by the user, before any fallback logic.
+         * This is crucial for correct polling and recovery.
+         */
+        this.userSelectedUrl = null;
+        /** @type {boolean} Tracks if the user has interacted with the player. */
+        this.userInteracted = false;
+
+        // New states for robust HLS stall detection
+        /** @private */
+        this.isObservingStall = false;
+        /** @private */
+        this.stallObserverTimer = null;
+        /** 
+         * @private
+         * @type {string | null} Caches the content of the last known-stale media playlist.
+         * This is the key to breaking the poll-reconnect-fail loop.
+         */
+        this.lastKnownStaleContent = null;
 
         /** @private */
         this.logLevelMap = { 'debug': 0, 'info': 1, 'prod': 2, 'error': 2 };
@@ -135,6 +157,8 @@ export default class LivePlayer {
     start() {
         this.log('Player instance starting...', 'info');
         if (this.streamUrlList.length > 0) {
+            // A new start action resets any previous recovery attempts.
+            this.recoveryAttempts = 0;
             // setupPlayer 现在是智能的，直接调用即可
             this.setupPlayer(this.streamUrlList[0].url, 'initial load');
         } else {
@@ -158,6 +182,9 @@ export default class LivePlayer {
         if (this.latencyChecker) {
             clearInterval(this.latencyChecker);
         }
+        this.clearOfflineState(); // Also clears the offlinePoller
+        this.resetStallObservation(); // Clears the stallObserverTimer
+        this.recoveryAttempts = 0; // 重置计数器
         this.container.innerHTML = '';
         this.currentPlayerType = null;
     }
@@ -275,6 +302,8 @@ export default class LivePlayer {
         });
         this.refreshBtn.addEventListener("click", (e) => {
             e.stopPropagation();
+            // A manual refresh should reset any previous recovery attempts.
+            this.recoveryAttempts = 0;
             this.setupPlayer(this.currentUrl, "refresh");
         });
         this.muteBtn.addEventListener("click", (e) => {
@@ -336,12 +365,23 @@ export default class LivePlayer {
         // when playback successfully starts, preventing premature hiding.
         this.video.addEventListener('playing', () => {
             this.log('Video playback has started. Hiding loading overlay.', 'debug');
+            if (this.isObservingStall) {
+                this.log('Ignoring "playing" event because a critical HLS investigation is in progress.', 'warn');
+                return; // ABORT. Do not touch any state.
+            }
+
             if (this.loadingOverlay) {
                 this.loadingOverlay.style.display = 'none';
             }
-            // A successful playback start means the stream is healthy.
-            // Reset the consecutive 404 counter.
-            this.consecutive404s = 0;
+
+            // The logic for resetting the recovery counter remains the same and is now safe.
+            if (this.currentPlayerType === 'flv') {
+                this.log('FLV stream is playing, resetting recovery attempts.', 'info');
+                this.recoveryAttempts = 0;
+            }
+
+            // This is now also safe, because we've already returned if an investigation was active.
+            this.resetStallObservation();
         });
     }
 
@@ -406,6 +446,12 @@ export default class LivePlayer {
      */
     setupPlayer(targetUrl, reason = "unknown") {
         this.log(`Setup requested for: ${targetUrl}, Reason: ${reason}`, "info");
+
+        // Set the userSelectedUrl ONLY if it's a direct user action or initial load.
+        // Recovery attempts should NOT change the user's original selection.
+        if (!reason.endsWith('-recovery')) {
+            this.userSelectedUrl = targetUrl;
+        }
 
         if (!targetUrl) {
             this.displayError("Setup failed: Target URL is invalid.");
@@ -494,28 +540,31 @@ export default class LivePlayer {
             this.log(`flv.js runtime error: ${errorType}`, "error", { errorDetail, errorInfo });
 
             const httpStatus = errorInfo && errorInfo.code;
-            if (errorType === flvjs.ErrorTypes.NETWORK_ERROR && httpStatus === 404) {
-                this.consecutive404s++;
-                this.log(`FLV 404 error detected. Count: ${this.consecutive404s}`, 'warn');
 
-                if (this.consecutive404s >= this.maxConsecutive404s) {
-                    this.log('Consecutive FLV 404 threshold reached. Declaring stream offline.', 'error');
+            // 我们只对网络错误进行处理
+            if (errorType === flvjs.ErrorTypes.NETWORK_ERROR) {
+                // --- Case 1: 主播未开播 (首次加载就遇到 404) ---
+                // 这是最特殊的场景，需要立即、直接地更新UI，并停止一切后续操作。
+                if (httpStatus === 404 && this.recoveryAttempts === 0) {
+                    this.log('FLV stream not found (404) on initial attempt. Showing offline overlay.', 'error');
+
+                    // 直接手动控制UI，不再调用任何复杂的处理函数
                     if (this.loadingOverlay) this.loadingOverlay.style.display = 'none';
                     if (this.offlineOverlay) this.offlineOverlay.style.display = 'flex';
-                    this.handleOfflineState();
-                } else {
-                    this.log('Tolerating FLV 404 error, attempting a quick reconnect...', 'info');
-                    setTimeout(() => this.setupPlayer(this.currentUrl, 'flv-404-recovery'), 1500);
-                }
-                return;
-            }
 
-            if (type === flvjs.ErrorTypes.NETWORK_ERROR) {
-                setTimeout(() => {
-                    if (url === this.currentUrl)
-                        // 注意：这里调用主 setupPlayer 进行重试，而不是直接调用 setupFlvPlayer
-                        this.setupPlayer(this.currentUrl, "network recovery");
-                }, 2000);
+                    // 停止播放器的所有活动，因为已经确定未开播
+                    this.flvPlayer.unload();
+                    this.flvPlayer.detachMediaElement();
+
+                    // 手动启动后台轮询
+                    this.handleOfflineState();
+
+                    return; // *** 关键：到此为止，终止执行 ***
+                }
+
+                // --- Case 2: 所有其他网络错误 (中途断流、重试中404等) ---
+                // 这些场景全部交给带重试计数器的标准错误处理器。
+                this.handleStreamError(`flv-${errorDetail}`);
             }
         });
 
@@ -555,39 +604,42 @@ export default class LivePlayer {
             this.hlsPlayer.on(Hls.Events.ERROR, (event, data) => {
                 this.log(`hls.js error: ${data.type} - ${data.details}`, 'error', data);
 
-                // This condition now catches 404s on manifest, playlist, or fragments.
-                if (data.type === Hls.ErrorTypes.NETWORK_ERROR && data.response && data.response.code === 404) {
-                    this.consecutive404s++;
-                    this.log(`HLS 404 error detected. Count: ${this.consecutive404s}`, 'warn');
-
-                    if (this.consecutive404s >= this.maxConsecutive404s) {
-                        this.log('Consecutive HLS 404 threshold reached. Declaring stream offline.', 'error');
-                        if (this.loadingOverlay) this.loadingOverlay.style.display = 'none';
-                        if (this.offlineOverlay) this.offlineOverlay.style.display = 'flex';
-                        this.handleOfflineState();
-                    } else {
-                        this.log('Tolerating HLS 404 error, attempting a quick reconnect...', 'info');
-                        setTimeout(() => this.setupPlayer(this.currentUrl, 'hls-404-recovery'), 1500);
-                    }
+                // --- PRIORITY 1: Handle the unique UI case of an initial 404 ---
+                // This must be checked first for the best user experience on an offline stream.
+                if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR && data.response?.code === 404 && this.recoveryAttempts === 0) {
+                    this.log('HLS manifest not found (404) on initial attempt. Displaying offline overlay and starting poller.', 'error');
+                    if (this.loadingOverlay) this.loadingOverlay.style.display = 'none';
+                    if (this.offlineOverlay) this.offlineOverlay.style.display = 'flex';
+                    this.hlsPlayer.stopLoad();
+                    this.handleOfflineState();
                     return;
                 }
 
-                // Existing fatal error recovery logic
-                if (data.fatal) {
-                    switch (data.type) {
-                        case Hls.ErrorTypes.NETWORK_ERROR:
-                            this.log('Fatal network error, attempting to recover...', 'warn');
-                            this.hlsPlayer.startLoad();
-                            break;
-                        case Hls.ErrorTypes.MEDIA_ERROR:
-                            this.log('Fatal media error, attempting to recover...', 'warn');
-                            this.hlsPlayer.recoverMediaError();
-                            break;
-                        default:
-                            this.setupPlayer(this.currentUrl, "hls.js fatal error recovery");
-                            break;
-                    }
+                // --- PRIORITY 2: If we are already investigating, ignore all subsequent errors ---
+                // This state lock is the key to preventing all race conditions.
+                if (this.isObservingStall) {
+                    this.log(`Ignoring HLS error (${data.details}) because an investigation is already in progress.`, 'debug');
+                    return;
                 }
+
+                // --- PRIORITY 3: Trust hls.js on FATAL errors ---
+                // If the library itself gives up after its own retries, we escalate to our recovery mechanism.
+                // This handles levelLoadTimeOut, manifestLoadError, and any other future fatal errors generically.
+                if (data.fatal) {
+                    this.log(`A fatal HLS error occurred (${data.details}). Escalating to our recovery handler.`, 'warn');
+                    this.handleStreamError(`hls-fatal-${data.details}`);
+                    return;
+                }
+
+                // --- PRIORITY 4: Investigate ambiguous "soft errors" ---
+                // If the error is not fatal but playback is stalled, it's time for our expert investigator to step in.
+                if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+                    this.isObservingStall = true; // Set the lock
+                    this.investigateHlsFailure();
+                }
+
+                // All other non-fatal errors (like bufferNudgeOnStall) are considered minor and handled internally
+                // by hls.js, so we don't need to react to them.
             });
 
             this.commonPlayLogic();
@@ -688,11 +740,15 @@ export default class LivePlayer {
     /** Switches to a new stream line. @private */
     switchLine(targetLi) {
         const newUrl = targetLi.dataset.url;
-        if (!newUrl || (newUrl === this.currentUrl && !this.isLoading)) {
+        // Compare with userSelectedUrl to prevent re-setup on the same intended line.
+        if (!newUrl || (newUrl === this.userSelectedUrl && !this.isLoading)) {
             this.lineSwitchMenu.classList.remove("visible");
             return;
         }
         this.lineSwitchMenu.classList.remove("visible");
+        // Switching line is a user-initiated action and should reset recovery attempts.
+        this.recoveryAttempts = 0;
+        // When switching line, we are setting a new user-selected URL.
         this.setupPlayer(newUrl, `manual switch to ${targetLi.textContent}`);
     }
 
@@ -826,51 +882,108 @@ export default class LivePlayer {
     }
 
     /**
-     * Handles the "stream offline" scenario. It now initiates a silent polling
+     * @private
+     * Normalizes an M3U8 playlist content by removing query strings from .ts segment URLs.
+     * This is crucial for comparing playlists when server-side caches might alter query params
+     * without changing the actual underlying (stale) TS file.
+     * @param {string | null} m3u8Content The raw M3U8 content.
+     * @returns {string | null} The normalized M3U8 content or null if input was null.
+     */
+    normalizeM3u8Content(m3u8Content) {
+        if (!m3u8Content) {
+            return null;
+        }
+        // This regex finds all lines ending in '.ts?....' and replaces them with just '.ts'
+        // 'g' flag for global replace, 'm' flag for multiline mode (so '$' matches end of line)
+        return m3u8Content.replace(/\.ts\?.*$/gm, '.ts');
+    }
+
+    /**
+     * Handles the "stream offline" scenario. It initiates a silent polling
      * mechanism using fetch() that does not interfere with the UI until the
      * stream is confirmed to be back online.
+     * Implements the "intelligent polling" strategy.
+     * It now fetches the actual media playlist and compares its content against
+     * the last known stale content before deciding if the stream is truly back online.
      * @private
      */
     handleOfflineState() {
-        // Ensure any previous poller is stopped before starting a new one.
         if (this.offlinePoller) {
             clearInterval(this.offlinePoller);
         }
 
-        // Start polling silently in the background.
         this.offlinePoller = setInterval(async () => {
-            this.log('Polling for live stream silently...', 'debug');
-
-            // Find the original, user-intended URL to check.
-            const originalUrl = this.streamUrlList.find(line =>
-                line.url === this.currentUrl || line.fallback === this.currentUrl
-            )?.url;
-
-            if (!originalUrl) {
-                this.log('Could not find original URL to poll, stopping poller.', 'error');
+            const masterUrl = this.userSelectedUrl;
+            if (!masterUrl) {
+                this.log('Could not find user-selected URL to poll, stopping poller.', 'error');
                 this.clearOfflineState();
                 return;
             }
 
-            try {
-                // Use a HEAD request for efficiency - we only need headers and status, not the body.
-                // 'no-cache' ensures we get a fresh response from the server.
-                const response = await fetch(originalUrl, { method: 'HEAD', cache: 'no-cache' });
+            // This intelligent logic is for HLS only.
+            if (!masterUrl.endsWith('.m3u8')) {
+                // For FLV, just do a simple HEAD request.
+                this.log(`Polling for user-selected FLV stream silently: ${masterUrl}`, 'debug');
+                try {
+                    const response = await fetch(masterUrl, { method: 'HEAD', cache: 'no-cache' });
+                    if (response.ok) {
+                        this.log('Stream is back online! Re-initializing player.', 'info');
+                        this.clearOfflineState();
+                        this.setupPlayer(masterUrl, 'offline-poll-success');
+                    }
+                } catch (error) { /* Do nothing on network error */ }
+                return;
+            }
 
-                // response.ok is true for HTTP status codes 200-299.
-                if (response.ok) {
-                    this.log('Stream is back online! Re-initializing player.', 'info');
-                    // IMPORTANT: Stop the poller first, then trigger the main setup process.
-                    this.clearOfflineState();
-                    this.setupPlayer(originalUrl, 'offline-poll-success');
+            this.log(`Intelligently polling HLS stream: ${masterUrl}`, 'debug');
+
+            try {
+                // Step 1: Fetch the master playlist to get the current media playlist URL.
+                const masterResponse = await fetch(masterUrl, { cache: 'no-cache' });
+                if (!masterResponse.ok) return;
+                const masterContent = await masterResponse.text();
+
+                // A very basic parser to find the first non-comment line (the media playlist URI)
+                const mediaPlaylistUri = masterContent.split('\n').find(line => line.trim() && !line.startsWith('#'));
+                if (!mediaPlaylistUri) return;
+
+                // Handle both relative and absolute URIs in the master playlist
+                const mediaPlaylistUrl = new URL(mediaPlaylistUri, masterUrl).href;
+
+                // Step 2: Fetch the actual media playlist.
+                const mediaResponse = await fetch(mediaPlaylistUrl, { cache: 'no-cache' });
+                if (!mediaResponse.ok) return;
+                const mediaContent = await mediaResponse.text();
+
+                // Normalize content before comparison
+                const normalizedMediaContent = this.normalizeM3u8Content(mediaContent);
+                const normalizedStaleContent = this.normalizeM3u8Content(this.lastKnownStaleContent);
+
+                // Enhanced debug logging to show both raw and normalized versions
+                this.log('--- M3U8 Comparison Debug ---', 'debug');
+                this.log('Stored (stale) RAW m3u8:', 'debug', { content: this.lastKnownStaleContent });
+                this.log('Fetched (current) RAW m3u8:', 'debug', { content: mediaContent });
+                this.log('Stored (stale) NORMALIZED m3u8:', 'debug', { content: normalizedStaleContent });
+                this.log('Fetched (current) NORMALIZED m3u8:', 'debug', { content: normalizedMediaContent });
+                this.log('--- End Comparison Debug ---', 'debug');
+
+                // Step 3: Compare its content with the last known stale content.
+                // The comparison now uses the normalized (parameter-free) content
+                if (this.lastKnownStaleContent && normalizedMediaContent === normalizedStaleContent) {
+                    // It's still the same old, dead playlist. Do nothing and wait.
+                    this.log('Poll check: HLS media playlist is still stale.', 'debug');
                 } else {
-                    // Stream is still offline (e.g., 404). Do nothing to the UI and wait for the next poll.
-                    this.log(`Poll check: Stream still offline with status ${response.status}`, 'debug');
+                    // It's different! This means the stream is genuinely new or has been revived.
+                    this.log('Stream is back online! HLS media playlist has changed.', 'info');
+                    this.clearOfflineState();
+                    this.lastKnownStaleContent = null; // Clear the cache
+                    // Show loading animation and setup the player.
+                    this.loadingOverlay.style.display = 'flex';
+                    this.offlineOverlay.style.display = 'none';
+                    this.setupPlayer(masterUrl, 'offline-poll-success');
                 }
             } catch (error) {
-                // A network error occurred during the poll (e.g., DNS, CORS, no internet).
-                // Do nothing to the UI and wait for the next poll.
-                this.log('Poll check: Network error.', 'warn');
+                this.log(`Poll check: Network error during intelligent poll. ${error.message}`, 'warn');
             }
         }, this.offlinePollInterval);
     }
@@ -888,6 +1001,137 @@ export default class LivePlayer {
         if (this.offlineOverlay) {
             this.offlineOverlay.style.display = 'none';
         }
+    }
+
+    /**
+     * @private
+     * Initiates a check to see if the HLS manifest (m3u8) is still being updated.
+     * This is the most reliable way to differentiate a network stall from a true "stream ended" event.
+     * It programmatically checks for a stale manifest multiple times without relying on
+     * a full player reconnect loop. This is the definitive solution to the "ghost-play" loop.
+     */
+    async investigateHlsFailure() {
+        this.log('Severe HLS error detected. Initiating failure investigation sequence.', 'warn');
+
+        try {
+            if (!this.hlsPlayer || !this.hlsPlayer.levels || this.hlsPlayer.currentLevel < 0) {
+                throw new Error('HLS player or its active level is not ready.');
+            }
+
+            const mediaPlaylistUrl = this.hlsPlayer.levels[this.hlsPlayer.currentLevel].url;
+            const MAX_CHECKS = 3;
+            // Shorter interval for faster feedback
+            const CHECK_INTERVAL = 2500;
+            let lastContent = '';
+
+            for (let i = 1; i <= MAX_CHECKS; i++) {
+                // If the lock was released by another process (e.g. successful 'playing' event), abort.
+                if (!this.isObservingStall) {
+                    this.log('HLS investigation was cancelled externally.', 'info');
+                    return; // Exit the investigation
+                }
+
+                try {
+                    const response = await fetch(mediaPlaylistUrl, { cache: 'no-cache' });
+                    if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+                    const currentContent = await response.text();
+
+                    if (i > 0 && lastContent && currentContent !== lastContent) {
+                        // SUCCESS: Stream is alive and updated.
+                        this.log(`HLS media playlist updated on check ${i}/${MAX_CHECKS}. Stream is healthy.`, 'info');
+                        this.recoveryAttempts = 0; // Reset main counter
+                        // The 'finally' block will release the lock.
+                        return;
+                    }
+                    lastContent = currentContent;
+                    this.log(`HLS investigation check ${i}/${MAX_CHECKS}: Playlist is stale.`, 'debug');
+                } catch (error) {
+                    this.log(`Network error during HLS investigation check ${i}/${MAX_CHECKS}: ${error.message}.`, 'warn');
+                }
+
+                if (i < MAX_CHECKS) await new Promise(resolve => setTimeout(resolve, CHECK_INTERVAL));
+            }
+
+            // FAILURE: All checks completed, and the playlist is still stale.
+            this.log(`HLS stream failed ${MAX_CHECKS} consecutive checks. Declaring stream offline.`, 'error');
+            // Before declaring offline, CACHE the content of the stale playlist.
+            this.lastKnownStaleContent = lastContent;
+            this.recoveryAttempts = this.maxRecoveryAttempts;
+            this.handleStreamError('hls-investigation-failed');
+
+        } catch (error) {
+            // Catch errors from the initial setup (e.g., player not ready)
+            this.log(`HLS investigation could not start: ${error.message}`, 'error');
+            this.handleStreamError('hls-investigation-setup-failed');
+        } finally {
+            // CRUCIAL: ALWAYS release the lock when the investigation is over,
+            // no matter how it exits (success, failure, or unexpected error).
+            this.log('HLS investigation finished. Releasing lock.', 'debug');
+            this.isObservingStall = false;
+        }
+    }
+
+    /**
+     * @private
+     * Resets all states related to the stall observation process.
+     */
+    resetStallObservation() {
+        if (this.stallObserverTimer) {
+            clearTimeout(this.stallObserverTimer);
+            this.stallObserverTimer = null;
+        }
+        this.isObservingStall = false;
+    }
+
+    /**
+     * @private
+     * Unified handler for recoverable stream errors like Early-EOF or stale HLS manifest.
+     * Manages the recovery attempt counter and decides when to give up.
+     * @param {string} reason - A short string indicating the error reason for logging.
+     */
+    handleStreamError(reason) {
+        this.recoveryAttempts++;
+        this.log(`Recoverable stream error detected (${reason}). Attempt: ${this.recoveryAttempts}`, 'warn');
+
+        // Always reset stall observation state after a confirmed check
+        this.resetStallObservation();
+
+        if (this.recoveryAttempts >= this.maxRecoveryAttempts) {
+            this.log(`Recovery threshold reached for ${reason}. Declaring stream offline.`, 'error');
+            this.declareStreamOffline();
+        } else {
+            this.log(`Attempting a quick reconnect...`, 'info');
+            // Use a reason suffix to distinguish from user-initiated actions in logs
+            setTimeout(() => this.setupPlayer(this.currentUrl, `${reason}-recovery`), 1500);
+        }
+    }
+
+    /**
+     * @private
+     * A unified method to perform all actions when a stream is confirmed to be offline.
+     */
+    declareStreamOffline() {
+        // Step 1: Stop any active player instances without destroying the component.
+        if (this.flvPlayer) {
+            this.flvPlayer.unload();
+            this.flvPlayer.detachMediaElement();
+        }
+        if (this.hlsPlayer) {
+            this.video.src = '';
+            this.video.removeAttribute('src');
+            this.hlsPlayer.stopLoad();
+        }
+
+        // Step 2: Update the UI to show the offline state.
+        // Because we didn't destroy(), the elements are still here to be shown.
+        if (this.loadingOverlay) this.loadingOverlay.style.display = 'none';
+        if (this.offlineOverlay) this.offlineOverlay.style.display = 'flex';
+
+        // Step 3: Reset the recovery counter so that a manual refresh starts cleanly.
+        this.recoveryAttempts = 0;
+
+        // Step 4: Start the background polling to detect when the stream comes back online.
+        this.handleOfflineState();
     }
 
 }
