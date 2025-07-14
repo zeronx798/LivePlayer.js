@@ -1,0 +1,159 @@
+# 工作流名称
+name: Create Dev Release on Push
+
+# 工作流触发器：当推送到 main 分支时触发
+on:
+  push:
+    branches:
+      - main  # 进行开发构建的分支
+
+# 定义一个名为 'build-and-release' 的任务
+jobs:
+  build-and-release:
+    # 指定运行此任务的 Runner。确保这里的标签与注册 Runner 时使用的标签一致
+    runs-on: linux-amd64 # Runner 标签
+    steps:
+      # ----------------------------------------------------------------------
+      # 步骤 1: 调试 - 打印关键的 Gitea 变量 (可选，但推荐保留)
+      # ----------------------------------------------------------------------
+      - name: Debug Gitea Context Variables
+        run: |
+          echo "Gitea Server URL: ${{ gitea.server_url }}"
+          echo "Gitea Repository: ${{ gitea.repository }}"
+          echo "Gitea SHA: ${{ gitea.sha }}"
+
+      # ----------------------------------------------------------------------
+      # 步骤 2: 配置 Git 认证
+      # ----------------------------------------------------------------------
+      - name: Configure Git for checkout
+        run: |
+          GITEA_SERVER_URL="${{ gitea.server_url }}"
+          AUTH_HEADER="Authorization: basic $(echo -n "gitea-actions:${{ secrets.GITEA_TOKEN }}" | base64)"
+          git config --global "http.${GITEA_SERVER_URL}.extraheader" "${AUTH_HEADER}"
+          git config --global --add safe.directory "${{ gitea.workspace }}"
+      
+      # ----------------------------------------------------------------------
+      # 步骤 3: 检出代码
+      # ----------------------------------------------------------------------
+      - name: Checkout repository
+        run: |
+          git clone --depth 1 --branch ${{ gitea.ref_name }} "${{ gitea.server_url }}/${{ gitea.repository }}.git" .
+
+      # ----------------------------------------------------------------------
+      # 步骤 4: 清理认证信息 (这是一个良好的安全习惯)
+      # ----------------------------------------------------------------------
+      - name: Clean up Git credentials
+        if: always()
+        run: |
+          git config --global --unset-all "http.${{ gitea.server_url }}.extraheader"
+
+      # ----------------------------------------------------------------------
+      # 步骤 5: 设置 Node.js 环境
+      # ----------------------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      # ----------------------------------------------------------------------
+      # 步骤 6: 安装依赖并构建项目
+      # 这一步会生成我们需要的 'dist' 目录
+      # ----------------------------------------------------------------------
+      - name: Install dependencies and build
+        run: |
+          npm ci
+          npm run build
+
+      # ----------------------------------------------------------------------
+      # 步骤 7: (关键的缺失环节) 准备版本信息和发布产物
+      # 这一步会创建 SHORT_SHA 变量并打包 zip 文件
+      # 
+      # 工作流：
+      # 1. 从 Gitea 的完整 SHA 中截取前8位
+      # 2. 将这个值写入 $GITEA_ENV 文件，以便后续步骤通过 env 上下文引用
+      # 3. 创建以短哈希命名的 zip 压缩包
+      #    确保这一步在 'npm run build' 之后运行，这样 'dist' 目录才存在
+      # ----------------------------------------------------------------------
+      - name: Prepare release assets
+        id: prepare_assets # 给这个步骤一个 id
+        run: |
+          SHORT_SHA=$(echo "${{ gitea.sha }}" | cut -c1-8)
+          echo "SHORT_SHA=${SHORT_SHA}" >> $GITEA_ENV
+          (cd dist && zip -r "../liveplayer.zip" .)
+
+      # ------------------------------------------------------------------
+      # 步骤 8: 使用 curl 手动创建 Release (不包含附件)
+      #
+      # 1. 准备 API 请求的 JSON body
+      # 2. 使用 curl 调用 Gitea API 来创建 Release
+      #    我们将 API 的响应 (包含 upload_url) 保存到一个临时文件中
+      # 3. 从响应中提取 'upload_url' 并将其设置为本步骤的输出变量
+      # ------------------------------------------------------------------
+      - name: Create Release via API
+        id: create_release # 给这个步骤一个 id，以便后续步骤引用它的输出
+        run: |
+          JSON_BODY=$(printf '{
+            "tag_name": "git-%s",
+            "name": "Dev Build git-%s",
+            "body": "Automated development build from commit:\n> %s",
+            "prerelease": true
+          }' \
+          "${{ env.SHORT_SHA }}" \
+          "${{ env.SHORT_SHA }}" \
+          "${{ gitea.head_commit.message }}"
+          )
+
+          curl -L \
+            -X POST \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: token ${{ secrets.RELEASE_PAT }}" \
+            -d "${JSON_BODY}" \
+            -o response.json \
+            "${{ gitea.server_url }}/api/v1/repos/${{ gitea.repository }}/releases"
+          
+          echo "Gitea API Response:"
+          cat response.json
+
+          UPLOAD_URL=$(jq -r .upload_url response.json)
+          echo "::set-output name=upload_url::${UPLOAD_URL}"
+
+      # ------------------------------------------------------------------
+      # 步骤 9: 使用 curl 手动循环上传所有附件
+      #
+      # 1. 检查 UPLOAD_URL 是否有效
+      # 2. 获取上一步中得到的上传 URL
+      # 3. 上传 liveplayer.zip
+      # 4. 循环上传 dist 目录下的所有文件
+      # ------------------------------------------------------------------
+      - name: Upload Release Assets via API
+        run: |
+          UPLOAD_URL="${{ steps.create_release.outputs.upload_url }}"
+          
+          if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" == "null" ]; then
+            echo "::error::Failed to get upload URL from a previous step."
+            exit 1
+          fi
+
+          echo "Starting upload to: ${UPLOAD_URL}"
+
+          curl -L \
+            -X POST \
+            -H "Content-Type: application/zip" \
+            -H "Authorization: token ${{ secrets.RELEASE_PAT }}" \
+            --data-binary "@liveplayer.zip" \
+            "${UPLOAD_URL}?name=liveplayer.zip"
+
+          for file in dist/*; do
+            if [ -f "$file" ]; then
+              FILENAME=$(basename "$file")
+              echo "Uploading ${FILENAME}..."
+              curl -L \
+                -X POST \
+                -H "Content-Type: $(file -b --mime-type "$file")" \
+                -H "Authorization: token ${{ secrets.RELEASE_PAT }}" \
+                --data-binary "@$file" \
+                "${UPLOAD_URL}?name=${FILENAME}"
+            fi
+          done
