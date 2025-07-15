@@ -1,0 +1,112 @@
+name: Event-Driven - Sync Single Release to GitHub
+
+# 触发器：监听所有相关的 release 事件
+on:
+  release:
+    types: [created, published, edited, deleted]
+
+jobs:
+  sync-single-release:
+    runs-on: linux-amd64
+    env:
+      GH_TOKEN: ${{ secrets.G_GITHUB_TOKEN }}
+      GITHUB_REPO: ${{ secrets.G_GITHUB_REPO }}
+
+    steps:
+      # ===================================================================
+      #  分支 1: 只在 Release 被删除时运行
+      # ===================================================================
+      - name: Handle 'deleted' event
+        if: gitea.event.action == 'deleted'
+        env:
+          TAG_NAME: ${{ gitea.event.release.tag_name }}
+        run: |
+          echo "Action: Deleting release '$TAG_NAME' on GitHub..."
+          # || true 确保即使 release 在 GitHub 端不存在，步骤也不会因错误而中止整个工作流
+          gh release delete "$TAG_NAME" --repo "$GITHUB_REPO" --yes --cleanup-tag || true
+          echo "SUCCESS: Delete command for release '$TAG_NAME' sent to GitHub."
+
+      # ===================================================================
+      #  分支 2: 只在 Release 被创建、发布或编辑时运行
+      # ===================================================================
+      - name: Handle 'created', 'published' or 'edited' event
+        # 【核心修正】使用 Gitea 支持的、简单的 || 操作符来连接所有条件。
+        # 这是经过验证的、在 Gitea Actions 中唯一正确的“或”逻辑实现方式。
+        if: gitea.event.action == 'created' || gitea.event.action == 'published' || gitea.event.action == 'edited'
+        env:
+          GITEA_RELEASE_JSON: ${{ toJson(gitea.event.release) }}
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          GITEA_SERVER_URL: ${{ gitea.server_url }}
+          GITEA_REPOSITORY: ${{ gitea.repository }}
+        # 这个脚本块是从我们之前调试成功的“全量同步”脚本中精确复制的核心逻辑
+        run: |
+          # 【核心修正】不再直接使用 Gitea 事件的 JSON。
+          # 我们将主动从 API 获取最新的 Release 数据，以确保附件列表是最新的。
+          set -e # 确保任何命令失败时脚本都会立即退出
+
+          # 1. 从事件上下文中获取 Release ID
+          RELEASE_ID=${{ gitea.event.release.id }}
+          echo "Action triggered for Release ID: $RELEASE_ID. Fetching its latest details from Gitea API..."
+
+          # 2. 使用 Release ID 从 Gitea API 获取完整的、最新的 Release JSON
+          # 这是确保我们拿到完整附件列表的关键步骤
+          GITEA_RELEASE_JSON=$(curl -L --fail -H "Authorization: token $GITEA_TOKEN" \
+            "${GITEA_SERVER_URL}/api/v1/repos/${GITEA_REPOSITORY}/releases/${RELEASE_ID}")
+
+          # 检查是否成功获取数据
+          if [ -z "$GITEA_RELEASE_JSON" ]; then
+            echo "::error::Failed to fetch release details for ID ${RELEASE_ID} from Gitea API."
+            exit 1
+          fi
+
+          # 3. 从新获取的 JSON 中提取所有变量（与之前逻辑相同）
+          TAG_NAME=$(echo "$GITEA_RELEASE_JSON" | jq -r .tag_name)
+          RELEASE_NAME=$(echo "$GITEA_RELEASE_JSON" | jq -r .name)
+          RELEASE_BODY=$(echo "$GITEA_RELEASE_JSON" | jq -r .body)
+          IS_PRERELEASE=$(echo "$GITEA_RELEASE_JSON" | jq -r .prerelease)
+          ASSETS_JSON=$(echo "$GITEA_RELEASE_JSON" | jq -c .assets)
+
+          echo "Action: Creating or updating release '$TAG_NAME' on GitHub..."
+
+          # 4. 为了幂等性，先删除旧版本（保留原逻辑）
+          # 【重要】确保这里不使用 --cleanup-tag，否则会删除 GitHub 上的 Git 标签，导致后续创建失败
+          echo "--> Step 4: Deleting old GitHub release object for idempotency..."
+          gh release delete "$TAG_NAME" --repo "$GITHUB_REPO" --yes || true
+
+          # 5. 下载所有附件（保留原逻辑）
+          echo "--> Step 5: Downloading assets..."
+          rm -rf ./temp_assets && mkdir -p ./temp_assets
+          ASSET_PATHS=()
+
+          if [ "$ASSETS_JSON" != "null" ] && [ "$(echo "$ASSETS_JSON" | jq 'length')" -gt 0 ]; then
+            echo "Found $(echo "$ASSETS_JSON" | jq 'length') assets to download."
+            while IFS= read -r asset_json; do
+              ASSET_ID=$(echo "$asset_json" | jq -r .id)
+              ASSET_NAME=$(echo "$asset_json" | jq -r .name)
+              FILE_PATH="./temp_assets/$ASSET_NAME"
+              # 注意：附件下载的 API URL 结构与获取 Release 详情的 URL 不同
+              ASSET_API_URL="${{ gitea.server_url }}/api/v1/repos/${{ gitea.repository }}/releases/${RELEASE_ID}/assets/${ASSET_ID}"
+              echo "Downloading asset '$ASSET_NAME'..."
+              curl -L --fail -H "Authorization: token $GITEA_TOKEN" -o "$FILE_PATH" "$ASSET_API_URL"
+              ASSET_PATHS+=("$FILE_PATH")
+            done < <(echo "$ASSETS_JSON" | jq -c '.[]')
+          else
+            echo "No assets found for this release."
+          fi
+
+          # 6. 在 GitHub 上创建新 Release（保留原逻辑）
+          echo "--> Step 6: Creating GitHub release..."
+          echo "$RELEASE_BODY" > "notes.txt"
+          CREATE_ARGS=( "$TAG_NAME" --repo "$GITHUB_REPO" --title "$RELEASE_NAME" --notes-file "notes.txt" )
+          if [ "$IS_PRERELEASE" = "true" ]; then CREATE_ARGS+=(--prerelease); fi
+          if [ ${#ASSET_PATHS[@]} -gt 0 ]; then CREATE_ARGS+=("${ASSET_PATHS[@]}"); fi
+
+          gh release create "${CREATE_ARGS[@]}"
+
+          if [ $? -ne 0 ]; then
+              echo "::error::'gh release create' failed for tag $TAG_NAME. Check if tag exists on GitHub and if permissions are correct."
+              exit 1
+          fi
+          rm notes.txt
+
+          echo "SUCCESS: Created/Updated release '$TAG_NAME' on GitHub with all its assets."
