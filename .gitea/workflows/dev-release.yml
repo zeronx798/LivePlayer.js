@@ -18,7 +18,6 @@ jobs:
       # ----------------------------------------------------------------------
       - name: Debug Gitea Context Variables
         run: |
-          echo "Gitea Server URL: ${{ gitea.server_url }}"
           echo "Gitea Repository: ${{ gitea.repository }}"
           echo "Gitea SHA: ${{ gitea.sha }}"
 
@@ -58,7 +57,6 @@ jobs:
 
       # ----------------------------------------------------------------------
       # 步骤 6: 安装依赖并构建项目
-      # 这一步会生成我们需要的 'dist' 目录
       # ----------------------------------------------------------------------
       - name: Install dependencies and build
         run: |
@@ -66,45 +64,78 @@ jobs:
           npm run build
 
       # ----------------------------------------------------------------------
-      # 步骤 7: (关键的缺失环节) 准备版本信息和发布产物
-      # 这一步会创建 SHORT_SHA 变量并打包 zip 文件
-      # 
-      # 工作流：
-      # 1. 从 Gitea 的完整 SHA 中截取前8位
-      # 2. 将这个值写入 $GITEA_ENV 文件，以便后续步骤通过 env 上下文引用
-      # 3. 创建以短哈希命名的 zip 压缩包
-      #    确保这一步在 'npm run build' 之后运行，这样 'dist' 目录才存在
+      # 步骤 7: 准备版本信息和发布产物
       # ----------------------------------------------------------------------
       - name: Prepare release assets
-        id: prepare_assets # 给这个步骤一个 id
+        id: prepare_assets
         run: |
           SHORT_SHA=$(echo "${{ gitea.sha }}" | cut -c1-8)
           echo "SHORT_SHA=${SHORT_SHA}" >> $GITEA_ENV
           (cd dist && zip -r "../liveplayer.zip" .)
 
-      # ------------------------------------------------------------------
-      # 步骤 8: 使用 curl 手动创建 Release (不包含附件)
-      #
-      # 1. 准备 API 请求的 JSON body
-      # 2. 使用 curl 调用 Gitea API 来创建 Release
-      #    我们将 API 的响应 (包含 upload_url) 保存到一个临时文件中
-      # 3. 从响应中提取 'upload_url' 并将其设置为本步骤的输出变量
-      # ------------------------------------------------------------------
-      - name: Create Release via API
-        id: create_release # 给这个步骤一个 id，以便后续步骤引用它的输出
+      # ----------------------------------------------------------------------
+      # 新增步骤 8: 分析提交信息以确定发布类型
+      # 1. 检查提交信息是否符合版本号格式 (e.g., 1.2.3, 4.5.6-rc.1, 7.8.9-SNAPSHOT)
+      #    正则表达式匹配 X.Y.Z 或 X.Y.Z-suffix 格式
+      # 2. 如果是版本号，设置 IS_VERSION_COMMIT=true 和发布的详细信息
+      # 3. 如果不是，设置 IS_VERSION_COMMIT=false，以触发后续的开发构建流程
+      # ----------------------------------------------------------------------
+      - name: Analyze Commit Message for Versioning
+        id: commit_analyzer
         run: |
-          JSON_BODY=$(printf '{
-            "tag_name": "git-%s",
-            "name": "Dev Build git-%s",
-            "body": "Automated development build from commit:\n> %s",
-            "prerelease": true
-          }' \
-          "${{ env.SHORT_SHA }}" \
-          "${{ env.SHORT_SHA }}" \
-          "${{ gitea.head_commit.message }}"
+          COMMIT_MSG=$(git log -1 --pretty=%s "${{ gitea.sha }}")
+          if [[ "$COMMIT_MSG" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?)$ ]]; then
+            VERSION_TAG="${BASH_REMATCH[1]}"
+            echo "Commit message is a version: ${VERSION_TAG}"
+            echo "IS_VERSION_COMMIT=true" >> $GITEA_ENV
+            echo "TAG_NAME=${VERSION_TAG}" >> $GITEA_ENV
+            
+            if [[ "$VERSION_TAG" == *-rc* ]]; then
+              echo "Release type: Release Candidate"
+              echo "RELEASE_NAME=Release Candidate ${VERSION_TAG}" >> $GITEA_ENV
+              echo "PRERELEASE=true" >> $GITEA_ENV
+            elif [[ "$VERSION_TAG" == *-* ]]; then
+              echo "Release type: Snapshot"
+              echo "RELEASE_NAME=Snapshot ${VERSION_TAG}" >> $GITEA_ENV
+              echo "PRERELEASE=true" >> $GITEA_ENV
+            else
+              echo "Release type: Full Release"
+              echo "RELEASE_NAME=Release ${VERSION_TAG}" >> $GITEA_ENV
+              echo "PRERELEASE=false" >> $GITEA_ENV
+            fi
+          else
+            echo "Commit message :$COMMIT_MSG: is not a version. Proceeding with dev build."
+            echo "IS_VERSION_COMMIT=false" >> $GITEA_ENV
+          fi
+
+      # ------------------------------------------------------------------
+      # 步骤 9A: 如果是版本号提交，则创建正式版、RC版或快照版 Release
+      # 此步骤仅在 env.IS_VERSION_COMMIT == 'true' 时运行
+      # ------------------------------------------------------------------
+      - name: Create Versioned Release (if applicable)
+        id: create_versioned_release
+        if: env.IS_VERSION_COMMIT == 'true'
+        run: |
+          COMMIT_MSG_FROM_GIT=$(git log -1 --pretty=%B "${{ gitea.sha }}")
+          BODY_TEXT=$(printf "Release for version **%s**.\n\nCommit details:\n> %s" "${{ env.TAG_NAME }}" "${COMMIT_MSG_FROM_GIT}")
+
+          JSON_BODY=$(jq -n \
+            --arg tag "${{ env.TAG_NAME }}" \
+            --arg name "${{ env.RELEASE_NAME }}" \
+            --arg body "${BODY_TEXT}" \
+            --argjson prerelease ${{ env.PRERELEASE }} \
+            '{
+              "tag_name": $tag,
+              "name": $name,
+              "body": $body,
+              "prerelease": $prerelease
+            }'
           )
 
-          curl -L \
+          echo "Generated JSON Body for Versioned Release:"
+          echo "${JSON_BODY}"
+
+          curl -sL \
             -X POST \
             -H "Accept: application/json" \
             -H "Content-Type: application/json" \
@@ -112,48 +143,77 @@ jobs:
             -d "${JSON_BODY}" \
             -o response.json \
             "${{ gitea.server_url }}/api/v1/repos/${{ gitea.repository }}/releases"
-          
-          echo "Gitea API Response:"
-          cat response.json
 
           UPLOAD_URL=$(jq -r .upload_url response.json)
-          echo "::set-output name=upload_url::${UPLOAD_URL}"
+          echo "UPLOAD_URL=${UPLOAD_URL}" >> $GITEA_ENV
 
       # ------------------------------------------------------------------
-      # 步骤 9: 使用 curl 手动循环上传所有附件
-      #
-      # 1. 检查 UPLOAD_URL 是否有效
-      # 2. 获取上一步中得到的上传 URL
-      # 3. 上传 liveplayer.zip
-      # 4. 循环上传 dist 目录下的所有文件
+      # 步骤 9B: 如果不是版本号提交，则创建开发版 Release (保留原有行为)
+      # 此步骤仅在 env.IS_VERSION_COMMIT == 'false' 时运行
+      # ------------------------------------------------------------------
+      - name: Create Dev Release (if not a version commit)
+        id: create_dev_release # 更改ID以避免冲突
+        if: env.IS_VERSION_COMMIT == 'false'
+        run: |
+          COMMIT_MSG_FROM_GIT=$(git log -1 --pretty=%B "${{ gitea.sha }}")
+          BODY_TEXT=$(printf "Automated development build from commit %s:\n\n> %s" "${{ env.SHORT_SHA }}" "${COMMIT_MSG_FROM_GIT}")
+
+          JSON_BODY=$(jq -n \
+            --arg sha ${{ env.SHORT_SHA }} \
+            --arg body "${BODY_TEXT}" \
+            '{
+              "tag_name": ("git-" + $sha),
+              "name": ("Dev Build git-" + $sha),
+              "body": $body,
+              "prerelease": true
+            }'
+          )
+
+          echo "Generated JSON Body for Dev Release:"
+          echo "${JSON_BODY}"
+
+          curl -sL \
+            -X POST \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: token ${{ secrets.RELEASE_PAT }}" \
+            -d "${JSON_BODY}" \
+            -o response.json \
+            "${{ gitea.server_url }}/api/v1/repos/${{ gitea.repository }}/releases"
+
+          UPLOAD_URL=$(jq -r .upload_url response.json)
+          echo "UPLOAD_URL=${UPLOAD_URL}" >> $GITEA_ENV
+
+      # ------------------------------------------------------------------
+      # 步骤 10: 上传附件到创建好的 Release
+      # 1. 动态获取步骤 9A 或 9B 中生成的 UPLOAD_URL
+      # 2. 上传所有产物
       # ------------------------------------------------------------------
       - name: Upload Release Assets via API
         run: |
-          UPLOAD_URL="${{ steps.create_release.outputs.upload_url }}"
+          UPLOAD_URL="${{ env.UPLOAD_URL }}"
           
           if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" == "null" ]; then
             echo "::error::Failed to get upload URL from a previous step."
             exit 1
           fi
 
-          echo "Starting upload to: ${UPLOAD_URL}"
-
-          curl -L \
+          curl -sL \
             -X POST \
             -H "Content-Type: application/zip" \
             -H "Authorization: token ${{ secrets.RELEASE_PAT }}" \
             --data-binary "@liveplayer.zip" \
-            "${UPLOAD_URL}?name=liveplayer.zip"
+            "${UPLOAD_URL}?name=liveplayer.zip" > /dev/null
 
           for file in dist/*; do
             if [ -f "$file" ]; then
               FILENAME=$(basename "$file")
               echo "Uploading ${FILENAME}..."
-              curl -L \
+              curl -sL \
                 -X POST \
                 -H "Content-Type: $(file -b --mime-type "$file")" \
                 -H "Authorization: token ${{ secrets.RELEASE_PAT }}" \
                 --data-binary "@$file" \
-                "${UPLOAD_URL}?name=${FILENAME}"
+                "${UPLOAD_URL}?name=${FILENAME}" > /dev/null
             fi
           done
