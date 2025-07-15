@@ -1,3 +1,8 @@
+/*!
+ * SPDX-FileCopyrightText: 2025 The LivePlayer Project Authors
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 // build.js
 const { rollup } = require('rollup');
 const { babel } = require('@rollup/plugin-babel'); // 【已修复】从新包导入
@@ -58,7 +63,10 @@ async function build() {
             file: path.join(distDir, 'liveplayer.umd.js'),
             format: 'umd',
             name: 'LivePlayer',
-            banner: `/** simple-live-player v1.0.0 */`,
+            banner: `/*!
+ * SPDX-FileCopyrightText: 2025 The LivePlayer Project Authors
+ * SPDX-License-Identifier: MPL-2.0
+ */`,
             sourcemap: true,
             globals: {
                 'flv.js': 'flvjs', // 'npm包名': '全局变量名'
@@ -69,7 +77,10 @@ async function build() {
         const esmOutputOptions = {
             file: path.join(distDir, 'liveplayer.esm.js'),
             format: 'esm',
-            banner: `/** simple-live-player v1.0.0 */`,
+            banner: `/*!
+ * SPDX-FileCopyrightText: 2025 The LivePlayer Project Authors
+ * SPDX-License-Identifier: MPL-2.0
+ */`,
             sourcemap: true
         };
 

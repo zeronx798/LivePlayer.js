@@ -1,6 +1,6 @@
 {
-  "name": "liveplayer-component",
-  "version": "1.0.0-SNAPSHOT",
+  "name": "@zeronx/liveplayer",
+  "version": "1.0.0-rc.0",
   "description": "Another framework-agnostic FLV and HLS live player component.",
   "main": "dist/liveplayer.umd.js",
   "module": "dist/liveplayer.esm.js",

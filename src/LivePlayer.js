@@ -1,3 +1,8 @@
+/*!
+ * SPDX-FileCopyrightText: 2025 The LivePlayer Project Authors
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 /**
  * @file liveplayer.js
  * @description A self-contained, zero-dependency and configurable FLV and HLS live player component.
