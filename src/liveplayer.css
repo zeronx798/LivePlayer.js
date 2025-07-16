@@ -5,7 +5,7 @@
 
 /* liveplayer.css (v1.0.0) */
 
-/* 组件根容器，由用户在HTML中定义大小 */
+/* Component root container, size defined by user in HTML */
 .live-player-component {
     display: flex;
     flex-direction: column;
@@ -13,30 +13,30 @@
     height: 100%;
 }
 
-/* 播放器主容器，继承父级的大小 */
+/* Player main container, inherits size from parent */
 .player-container {
     flex-grow: 1;
     position: relative;
     background-color: #000;
-    font-size: 16px; /* 基准字体大小，控件大小会相对变化 */
+    font-size: 16px; /* Base font size, controls will scale relatively */
     color: #fff;
-    overflow: hidden; /* 隐藏超出边界的子元素，如菜单 */
-    display: flex; /* 使用Flexbox来居中视频 */
+    overflow: hidden; /* Hide child elements that overflow, such as menus */
+    display: flex; /* Use Flexbox to center the video */
     justify-content: center;
     align-items: center;
 }
 .player-container.no-cursor { cursor: none; }
 
-/* video元素样式，实现letterbox效果 */
+/* Video element styles to achieve letterbox effect */
 .video-element {
     width: 100%;
     height: 100%;
-    /* 【核心】object-fit: contain 确保视频保持宽高比，多余部分留黑 */
+    /* `object-fit: contain` ensures video maintains aspect ratio with black bars for excess space */
     object-fit: contain;
     display: block;
 }
 
-/* 覆盖层通用样式 */
+/* Overlay common styles */
 .player-overlay {
     position: absolute;
     top: 0;
@@ -57,23 +57,23 @@
     font-size: 3em;
 }
 
-/* 花里胡哨的加载动画 */
+/* "Fancy" loading animation */
 .loading-equalizer {
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 40px; /* 动画的整体高度 */
+    height: 40px; /* Total height of the animation */
 }
 
 .loading-equalizer div {
     width: 6px;
     height: 100%;
     margin: 0 3px;
-    background-color: #ffffff; /* 条的颜色 */
+    background-color: #ffffff; /* Bar color */
     animation: stretch 1.2s infinite ease-in-out;
 }
 
-/* 为每个条设置不同的动画延迟 */
+/* Set different animation delays for each bar */
 .loading-equalizer div:nth-child(2) {
     animation-delay: -1.1s;
 }
@@ -99,22 +99,22 @@
     }
 }
 
-/* 离线状态显示 */
+/* Offline status display */
 .player-offline-overlay {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.7); /* 半透明黑色背景 */
+    background-color: rgba(0, 0, 0, 0.7); /* Semi-transparent black background */
     color: #ffffff;
-    display: none; /* 默认隐藏 */
+    display: none; /* default hidden */
     flex-direction: column;
     justify-content: center;
     align-items: center;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     text-align: center;
-    z-index: 5; /* 确保在视频之上，但在控件之下（如果需要）*/
+    z-index: 5; /* Ensure it stays above video but below controls (if needed) */
 }
 
 .offline-content {
@@ -124,13 +124,13 @@
 }
 
 .offline-content .fa-video-slash {
-    font-size: 48px; /* 一个大图标 */
+    font-size: 48px; /* One big icon */
     margin-bottom: 16px;
     opacity: 0.8;
 }
 
 .offline-content span {
-    font-size: 16px; /* 合适的字体大小 */
+    font-size: 16px;
     max-width: 80%;
 }
 
@@ -140,7 +140,7 @@
     padding: 20px;
 }
 
-/* 控件容器 */
+/* Controller container */
 .controls-container {
     position: absolute; bottom: 0; left: 0; right: 0;
     background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
@@ -159,7 +159,7 @@
 .controls-left, .controls-right { display: flex; align-items: center; gap: 1.25em; }
 .controls-right { margin-left: auto; }
 
-/* 控件按钮 */
+/* Controller button */
 .control-button {
     background: none; border: none; color: #fff;
     font-size: 1.1em; cursor: pointer; padding: 0;
@@ -167,24 +167,25 @@
 }
 .control-button:hover { color: #3498db; transform: scale(1.1); }
 
-/* 播放/暂停图标状态 */
+/* Play/Pause icon states */
 .play-pause-btn .fa-pause { display: none; }
 .player-container.paused .play-pause-btn .fa-play { display: block; }
 .player-container.paused .play-pause-btn .fa-pause { display: none; }
 
-/* 全屏图标状态 */
+/* Fullscreen icon states */
 .fullscreen-btn .fa-compress { display: none; }
 .player-container.fullscreen .fullscreen-btn .fa-expand { display: none; }
 .player-container.fullscreen .fullscreen-btn .fa-compress { display: block; }
 
-/* 音量容器 */
+/* Volume container */
 .volume-container { display: flex; align-items: center; gap: 0.75em; }
 .volume-slider {
     -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
     width: 80px;
     height: 5px;
-    /* 【修改】将默认轨道颜色放入 CSS 变量，方便覆盖 */
-    --track-color: rgba(255, 255, 255, 0.5);
+    --track-color: rgba(255, 255, 255, 0.5); /* Store default track color in CSS variable for easy overriding */
     background: var(--track-color);
     border-radius: 2.5px;
     outline: none;
@@ -192,10 +193,10 @@
     vertical-align: middle;
 }
 
-/* 【修复】静音图标初始状态 */
+/* Mute icon initial state */
 .mute-btn .fa-volume-up { display: none; }
 
-/* 非侵入式静音提示 */
+/* Non-intrusive mute indicator */
 .unmute-notice {
     color: #ffc107; font-size: 0.8em;
     cursor: pointer; background-color: rgba(0,0,0,0.5);
@@ -204,7 +205,7 @@
 }
 .unmute-notice.visible { display: flex; }
 
-/* 线路切换菜单 */
+/* Line switching menu */
 .line-switch-container { position: relative; }
 .line-switch-menu {
     position: absolute; bottom: 100%; right: 0;
@@ -220,7 +221,7 @@
 .line-switch-menu li:hover { background-color: #3498db; }
 .line-switch-menu li.active { font-weight: bold; color: #3498db; }
 
-/* 日志区域 */
+/* Log area */
 .log-output {
     margin-top: 15px;
     width: 100%;
@@ -230,24 +231,23 @@
     font-family: 'Courier New', Courier, monospace; font-size: 0.8em;
     padding: 10px; overflow-y: scroll;
     white-space: pre-wrap; resize: vertical;
-    flex-shrink: 0; /* 防止它在空间不足时被压缩 */
+    flex-shrink: 0; /* Prevent it from being compressed when space is insufficient */
 }
 
 .volume-container {
     display: flex;
     align-items: center;
     gap: 0.75em;
-    /* 【新增】为颜色变化添加平滑过渡 */
-    transition: filter 0.2s;
+    transition: filter 0.2s; /* Add smooth transition for color changes */
 }
 
-/* 【新增】当音量容器有 .muted 类时，将其下所有元素变为灰色 */
+/* When volume container has `.muted` class, make all child elements gray */
 .volume-container.muted .volume-slider {
-    background: #555; /* 将轨道颜色变为灰色 */
+    background: #555; /* Change track color to gray */
 }
 
 .volume-container.muted .volume-slider::-webkit-slider-thumb {
-    background: #999; /* 将滑块颜色也变为灰色 */
+    background: #999; /* Change slider color to gray as well */
 }
 .volume-container.muted .volume-slider::-moz-range-thumb {
     background: #999;
@@ -256,10 +256,11 @@
 
 .volume-slider {
     -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
     width: 80px;
     height: 5px;
-    /* 【修改】将默认轨道颜色放入 CSS 变量，方便覆盖 */
-    --track-color: rgba(255, 255, 255, 0.5);
+    --track-color: rgba(255, 255, 255, 0.5); /* Store default track color in CSS variable for easy overriding */
     background: var(--track-color);
     border-radius: 2.5px;
     outline: none;

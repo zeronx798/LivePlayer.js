@@ -3,3 +3,4 @@
 .src/
 node_modules/
 dist/
+LivePlayer.temp.js

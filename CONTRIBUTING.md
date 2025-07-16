@@ -20,7 +20,7 @@ When you open an issue, please provide as much detail as possible, including:
 - Expected behavior vs. actual behavior.
 - Your operating system and LivePlayer.js version.
 
-We will review the issue and sync it with our internal tracking system.
+We will review the issue soon.
 
 ### Submitting Pull Requests (PRs)
 

@@ -1,21 +1,21 @@
-# 工作流名称
+# Workflow Name
 name: Manual - Full Sync All Releases to GitHub
 
-# 触发器：仅手动触发
+# Trigger: Manual trigger only
 on:
   workflow_dispatch:
 
 jobs:
   full-sync:
-    runs-on: linux-amd64 # 您自托管 Runner 的标签
+    runs-on: linux-amd64 # The tag for your self-hosted Runner
     steps:
-      # 步骤 1: 从 Gitea API 获取所有 Release 的元数据
-      # 这个工作流现在只关心 Release 的元数据，不关心 Git 本身。
+      # Step 1: Fetch metadata for all Releases from the Gitea API
+      # This workflow now only cares about Release metadata, not the Git repository itself.
       - name: 'Fetch All Releases MetaData from Gitea'
         run: |
           echo "Fetching list of all releases from Gitea (the source of truth)..."
-          # 为了获取所有 release，可能需要分页。这里简化为最多获取 100 个。
-          # 如有需要可以添加分页逻辑。
+          # To fetch all releases, pagination might be needed. This is simplified to fetch a maximum of 100.
+          # You can add pagination logic if necessary.
           curl -L --fail -H "Authorization: token ${{ secrets.GITEA_TOKEN }}" \
             "${{ gitea.server_url }}/api/v1/repos/${{ gitea.repository }}/releases?limit=100" \
             -o releases.json
@@ -24,14 +24,14 @@ jobs:
           fi
           echo "Found $(jq '. | length' releases.json) releases to process from Gitea."
 
-      # 步骤 2: 清理 GitHub 上的所有旧 Release 对象 (【保留】所有标签)
-      # 标签由 'Sync Code and Tags' 工作流管理，这里绝对不能碰。
+      # Step 2: Wipe All Existing Release objects on GitHub (while KEEPING all tags)
+      # Tags are managed by the 'Sync Code and Tags' workflow and must absolutely not be touched here.
       - name: 'Wipe All Existing Releases on GitHub (Keep Tags)'
         env:
           GH_TOKEN: ${{ secrets.G_GITHUB_TOKEN }}
         run: |
           echo "Fetching all existing releases from GitHub to delete them..."
-          # 使用 gh cli 获取所有 release 关联的 tag 名
+          # Use the gh cli to get the tag names associated with all releases
           TAGS_TO_DELETE=$(gh release list --repo "${{ secrets.G_GITHUB_REPO }}" --limit 500 --json tagName -q '.[] | .tagName')
 
           if [ -z "$TAGS_TO_DELETE" ]; then
@@ -41,14 +41,14 @@ jobs:
             echo "$TAGS_TO_DELETE"
             echo "$TAGS_TO_DELETE" | while IFS= read -r tag; do
               echo "--> Deleting GitHub release object for tag: $tag"
-              # 【关键】这里只删除 release 对象，绝不使用 --cleanup-tag
+              # [CRITICAL] Only delete the release object here, never use --cleanup-tag
               gh release delete "$tag" --repo "${{ secrets.G_GITHUB_REPO }}" --yes 2>/dev/null || true
             done
             echo "All pre-existing release objects on GitHub have been wiped."
           fi
 
-      # 步骤 3: 按【从旧到新】的顺序在 GitHub 上重建所有 Release
-      # 这样可以完美保留 Gitea 上的原始顺序和日期
+      # Step 3: Recreate all Releases on GitHub in chronological order (from oldest to newest)
+      # This perfectly preserves the original order and dates from Gitea.
       - name: 'Recreate All Releases on GitHub in Chronological Order'
         env:
           GH_TOKEN: ${{ secrets.G_GITHUB_TOKEN }}
@@ -58,10 +58,10 @@ jobs:
             exit 0
           fi
         
-          # 【关键】使用 jq 的 reverse 命令反转数组，实现从旧到新处理
-          # 这样创建出来的 Release 就会按正确的日期排序
+          # [CRITICAL] Use jq's 'reverse' command to invert the array, processing from oldest to newest.
+          # The created Releases will then be sorted by the correct date.
           while IFS= read -r release_json; do
-            # 变量提取逻辑保持不变
+            # Variable extraction logic remains the same
             RELEASE_ID=$(echo "$release_json" | jq -r .id)
             TAG_NAME=$(echo "$release_json" | jq -r .tag_name)
             RELEASE_NAME=$(echo "$release_json" | jq -r .name)
@@ -72,7 +72,7 @@ jobs:
             echo "====================================================="
             echo "Recreating Release: $RELEASE_NAME (Tag: $TAG_NAME)"
 
-            # 下载附件逻辑保持不变
+            # Asset download logic remains the same
             rm -rf ./temp_assets && mkdir -p ./temp_assets
             ASSET_PATHS=()
             if [ "$ASSETS_JSON" != "null" ] && [ "$(echo "$ASSETS_JSON" | jq 'length')" -gt 0 ]; then
@@ -86,13 +86,13 @@ jobs:
               done < <(echo "$ASSETS_JSON" | jq -c '.[]')
             fi
 
-            # 创建 Release 逻辑保持不变
+            # Release creation logic remains the same
             echo "$RELEASE_BODY" > "notes_${TAG_NAME}.txt"
             CREATE_ARGS=( "$TAG_NAME" --repo "${{ secrets.G_GITHUB_REPO }}" --title "$RELEASE_NAME" --notes-file "notes_${TAG_NAME}.txt" )
             if [ "$IS_PRERELEASE" = "true" ]; then CREATE_ARGS+=(--prerelease); fi
             if [ ${#ASSET_PATHS[@]} -gt 0 ]; then CREATE_ARGS+=("${ASSET_PATHS[@]}"); fi
             
-            # gh release create 会自动找到 GitHub 上已存在的同名标签并附加 release
+            # 'gh release create' will automatically find the existing tag with the same name on GitHub and attach the release to it.
             gh release create "${CREATE_ARGS[@]}"
             
             if [ $? -ne 0 ]; then

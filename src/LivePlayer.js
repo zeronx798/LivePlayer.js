@@ -164,7 +164,7 @@ export default class LivePlayer {
         if (this.streamUrlList.length > 0) {
             // A new start action resets any previous recovery attempts.
             this.recoveryAttempts = 0;
-            // setupPlayer 现在是智能的，直接调用即可
+            // setupPlayer is now intelligent and can be called directly
             this.setupPlayer(this.streamUrlList[0].url, 'initial load');
         } else {
             this.displayError('No stream sources provided to start.');
@@ -189,7 +189,7 @@ export default class LivePlayer {
         }
         this.clearOfflineState(); // Also clears the offlinePoller
         this.resetStallObservation(); // Clears the stallObserverTimer
-        this.recoveryAttempts = 0; // 重置计数器
+        this.recoveryAttempts = 0; // Reset counter
         this.container.innerHTML = '';
         this.currentPlayerType = null;
     }
@@ -270,12 +270,13 @@ export default class LivePlayer {
         this.lineSwitchMenu = this.container.querySelector(".line-switch-menu");
         this.pipBtn = this.container.querySelector(".pip-btn");
         this.fullscreenBtn = this.container.querySelector(".fullscreen-btn");
-        // 该方法主体不变，仅需确认此处使用的 `this.streamUrlList` 已经是新格式
-        // 并且 `li.dataset.url = line.url` 的行为是正确的（它应该始终指向主URL）
+        // The method body remains unchanged, just need to confirm:
+        // 1. The `this.streamUrlList` here is already in the new format
+        // 2. The `li.dataset.url = line.url` behavior is correct (it should always point to the main URL)
         this.streamUrlList.forEach((line, index) => {
             const li = document.createElement("li");
             li.textContent = line.name;
-            // 确保使用标准化的 `url` 属性
+            // Ensure using standardized `url` property
             li.dataset.url = line.url;
             if (index === 0) li.classList.add("active");
             this.lineSwitchMenu.appendChild(li);
@@ -358,8 +359,8 @@ export default class LivePlayer {
         document.addEventListener("visibilitychange", () =>
             this.handleVisibilityChange()
         );
-        // 添加 seeked 事件监听器。当视频完成寻址操作后，隐藏加载动画。
-        // 这适用于所有寻址场景，包括我们主动追赶进度。
+        // Add seeked event listener. Hide loading animation when video completes seeking.
+        // This applies to all seeking scenarios, including when we actively catch up with progress.
         this.video.addEventListener('seeked', () => {
             this.log('Video seek completed.', 'debug');
             if (this.loadingOverlay) {
@@ -471,7 +472,7 @@ export default class LivePlayer {
         // the offline message and stops the polling timer if it's running.
         this.clearOfflineState();
 
-        // --- 核心回退逻辑 ---
+        // --- Core fallback logic ---
         let urlToPlay = targetUrl;
         const lineInfo = this.streamUrlList.find(line => line.url === targetUrl);
 
@@ -488,7 +489,7 @@ export default class LivePlayer {
             }
         }
 
-        // --- 统一的准备和清理工作 ---
+        // --- Unified preparation and cleanup ---
         this.isLoading = true;
         this.loadingOverlay.style.display = "flex";
         if (this.errorOverlay) this.errorOverlay.style.display = "none";
@@ -499,9 +500,9 @@ export default class LivePlayer {
         this.video.removeAttribute('src');
 
         this.currentUrl = urlToPlay;
-        this.updateActiveLineUI(targetUrl); // UI高亮用户选择的主线路
+        this.updateActiveLineUI(targetUrl); // Highlight user-selected main line in UI
 
-        // --- 根据最终要播放的URL进行调度 ---
+        // --- Schedule based on the final URL to be played ---
         if (urlToPlay.endsWith('.m3u8')) {
             this.currentPlayerType = 'hls';
             this.setupHlsPlayer(urlToPlay, reason);
@@ -525,7 +526,7 @@ export default class LivePlayer {
      * @param {string} reason - The reason for this setup call (for logging).
      */
     setupFlvPlayer(url, reason) {
-        // 这个检查是多余的，因为在 setupPlayer 中已经检查过了，但保留也无妨，更安全
+        // This check is redundant since setupPlayer already verified it, but keeping it makes it safer
         if (!flvjs.isSupported()) {
             this.displayError('FLV playback is not supported in this browser.');
             this.log('flv.js is not supported, cannot play FLV stream.', 'error');
@@ -550,29 +551,29 @@ export default class LivePlayer {
 
             const httpStatus = errorInfo && errorInfo.code;
 
-            // 我们只对网络错误进行处理
+            // We only handle network errors
             if (errorType === flvjs.ErrorTypes.NETWORK_ERROR) {
-                // --- Case 1: 主播未开播 (首次加载就遇到 404) ---
-                // 这是最特殊的场景，需要立即、直接地更新UI，并停止一切后续操作。
+                // --- Case 1: Streamer not live (encountered 404 on initial load) ---
+                // This is the most special case - requires immediate UI update and termination of all subsequent operations.
                 if (httpStatus === 404 && this.recoveryAttempts === 0) {
                     this.log('FLV stream not found (404) on initial attempt. Showing offline overlay.', 'error');
 
-                    // 直接手动控制UI，不再调用任何复杂的处理函数
+                    // Take direct manual control of UI, don't call any complex handlers
                     if (this.loadingOverlay) this.loadingOverlay.style.display = 'none';
                     if (this.offlineOverlay) this.offlineOverlay.style.display = 'flex';
 
-                    // 停止播放器的所有活动，因为已经确定未开播
+                    // Stop all player activities since we've confirmed the stream is offline
                     this.flvPlayer.unload();
                     this.flvPlayer.detachMediaElement();
 
-                    // 手动启动后台轮询
+                    // Manually initiate background polling
                     this.handleOfflineState();
 
-                    return; // *** 关键：到此为止，终止执行 ***
+                    return; // *** Critical: Terminate execution at this point ***
                 }
 
-                // --- Case 2: 所有其他网络错误 (中途断流、重试中404等) ---
-                // 这些场景全部交给带重试计数器的标准错误处理器。
+                // --- Case 2: All other network errors (mid-stream interruptions, 404 during retries, etc.) ---
+                // These scenarios are all handled by the standard error processor with retry counter.
                 this.handleStreamError(`flv-${errorDetail}`);
             }
         });
@@ -592,12 +593,12 @@ export default class LivePlayer {
      * @param {string} reason - The reason for this setup call (for logging).
      */
     setupHlsPlayer(url, reason) {
-        if (this.video.canPlayType('application/vnd.apple.mpegurl')) { // 原生HLS
+        if (this.video.canPlayType('application/vnd.apple.mpegurl')) { // Native HLS
             this.log(`Using native HLS playback for: ${url}`, 'info');
             this.video.src = url;
             this.video.addEventListener('loadedmetadata', () => {
                 this.log('Native HLS stream metadata loaded.', 'info');
-            }, { once: true }); // 使用 once 选项避免重复绑定
+            }, { once: true }); // Use once option to prevent duplicate binding
             this.commonPlayLogic();
         } else if (Hls.isSupported()) { // hls.js
             this.log(`Using hls.js for playback: ${url}`, 'info');
@@ -681,7 +682,7 @@ export default class LivePlayer {
                     this.updateAllUI();
                     if (this.currentPlayerType === 'flv' && this.options.liveEdge.enabled) {
                         this.startLatencyMonitor();
-                    } else if (this.latencyChecker) { // 如果从FLV切换到HLS，停止旧的延迟检查
+                    } else if (this.latencyChecker) { // If switching from FLV to HLS, stop old delayed check
                         clearInterval(this.latencyChecker);
                         this.latencyChecker = null;
                     }
@@ -704,7 +705,7 @@ export default class LivePlayer {
             : this.video.pause();
     }
 
-    /** Updates the volume slider and mute button icon. @private */
+    /** Updates the play and pause button icon. @private */
     updatePlayPauseUI() {
         const isPaused = this.video.paused;
         this.playerContainer.classList.toggle("paused", isPaused);
@@ -716,6 +717,8 @@ export default class LivePlayer {
                 isPaused ? "none" : "block";
         }
     }
+
+    /** Updates the volume slider and mute button icon. @private */
     updateVolumeUI() {
         if (!this.volumeSlider) return;
         const isMuted = this.video.muted || this.video.volume === 0;
@@ -789,29 +792,28 @@ export default class LivePlayer {
     /** Seeks the video to the most recently buffered position. @private */
     seekToLiveEdge() {
 
-        // 确保视频正在播放且有缓冲数据，否则无法计算延迟
+        // Ensure video is playing with buffered data, otherwise can't calculate latency
         if (this.video.paused || this.video.buffered.length === 0) {
             this.log('Video is not in a state to check latency (paused or no buffer).', 'debug');
         }
 
-        // 计算当前延迟
+        // calculate latency
         const bufferedEnd = this.video.buffered.end(this.video.buffered.length - 1);
         const latency = bufferedEnd - this.video.currentTime;
 
         if (latency > this.options.liveEdge.latency) {
             this.log(`Latency (${latency.toFixed(2)}s) is greater than ${this.options.liveEdge.latency}s. Seeking to live edge.`, 'info');
-            // 原有的seek代码
             if (this.video.buffered.length > 0) {
-                // --- MODIFIED: 在寻址前显示加载动画 ---
+                // Show loading animation before seeking
                 this.log('Seeking to live edge, showing loading overlay.', 'info');
                 if (this.loadingOverlay) {
-                    // 复用已有的加载动画
+                    // Reuse existing loading animation
                     this.loadingOverlay.style.display = 'flex';
                 }
                 const liveEdge = this.video.buffered.end(
                     this.video.buffered.length - 1
                 );
-                // 执行寻址操作，完成后 'seeked' 事件会触发并隐藏加载动画
+                // Perform seeking operation, 'seeked' event will hide loading animation when complete
                 this.video.currentTime = liveEdge - 0.1;
             } else {
                 this.log('Cannot seek to live edge, no buffer available.', 'warn');
@@ -829,26 +831,26 @@ export default class LivePlayer {
      */
     handleVisibilityChange() {
         if (document.hidden) {
-            // --- 关键：当页面隐藏时，我们什么都不做 ---
-            // 不要暂停视频，不要静音，让它继续尝试播放。
-            // 浏览器自身的节流机制仍然会起作用，但我们不主动干预。
+            // When page is hidden, we do nothing.
+            // Don't pause video, don't mute, let it continue trying to play.
+            // Browser's own throttling mechanism will still work, but we don't actively intervene.
             this.log('Tab is now hidden, attempting to continue playback in the background.', 'info');
         } else {
-            // --- 当页面恢复可见时 ---
+            // When page becomes visible again...
             this.log('Tab is visible again.', 'info');
 
-            // 1. 检查视频是否意外暂停了
+            // 1. Check if video was accidentally paused
             if (this.video.paused && this.userInteracted) {
                 this.log('Video was paused in background, attempting to resume.', 'warn');
                 this.video.play().catch(e => this.log(`Error resuming playback: ${e.message}`, 'error'));
             }
 
-            // 2. 检查延迟，因为后台播放可能会导致延迟累积
-            // 延迟一下再检查，给播放器一点时间恢复状态
+            // 2. Check latency since background playback may cause accumulation
+            // Delay the check slightly to give player time to recover
             setTimeout(() => {
                 this.log('Checking latency after returning from background...', 'info');
                 this.seekToLiveEdge();
-            }, 1000); // 1秒后检查
+            }, 1000); // 1 second
         }
     }
 

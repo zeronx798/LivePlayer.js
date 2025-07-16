@@ -1,7 +1,7 @@
-# 工作流名称
+# Workflow Name
 name: Sync Code and Tags to GitHub
 
-# 触发器：当任何分支有新的推送时运行
+# Trigger: Run when there is a new push to any branch
 on:
   push:
     branches:
@@ -9,15 +9,15 @@ on:
 
 jobs:
   sync-code-and-tags:
-    runs-on: linux-amd64 # 您自托管 Runner 的标签
+    runs-on: linux-amd64 # The tag for your self-hosted Runner
     steps:
-      # 步骤 1: 调试 - 打印关键的 Gitea 变量 (保持不变)
+      # Step 1: Debug - Print key Gitea variables (unchanged)
       - name: Debug Gitea Context Variables
         run: |
           echo "Gitea Repository: ${{ gitea.repository }}"
           echo "Gitea SHA: ${{ gitea.sha }}"
 
-      # 步骤 2: 配置 Git 认证 (保持不变)
+      # Step 2: Configure Git Authentication (unchanged)
       - name: Configure Git for checkout
         run: |
           GITEA_SERVER_URL="${{ gitea.server_url }}"
@@ -25,35 +25,34 @@ jobs:
           git config --global "http.${GITEA_SERVER_URL}.extraheader" "${AUTH_HEADER}"
           git config --global --add safe.directory "${{ gitea.workspace }}"
       
-      # 步骤 3: 检出代码 (保持不变)
-      # 这一步仍然只克隆了单个分支，但我们会在下一步中补全信息
+      # Step 3: Checkout Code (unchanged)
+      # This step still only clones a single branch, but we will fetch all information in the next step
       - name: Checkout repository
         run: |
           git clone --branch ${{ gitea.ref_name }} "${{ gitea.server_url }}/${{ gitea.repository }}.git" .
 
-      # 新增步骤 4: 获取所有分支和所有标签 (核心修正)
-      # 这是解决标签问题的关键。我们告诉 Git 从 origin (即 Gitea) 拉取所有东西。
+      # New Step 4: Fetch all branches and all tags (core fix)
+      # This is key to solving the tag issue. We tell Git to pull everything from origin (i.e., Gitea).
       - name: Fetch all branches and tags from origin (Gitea)
         run: |
           echo "Fetching all remote branches..."
-          # +refs/heads/*:refs/remotes/origin/* 这个 refspec 映射了所有远程分支
+          # The +refs/heads/*:refs/remotes/origin/* refspec maps all remote branches
           git fetch origin "+refs/heads/*:refs/remotes/origin/*"
           
           echo "Fetching all remote tags..."
-          # --tags 选项强制获取所有标签
+          # The --tags option forces fetching all tags
           git fetch origin --tags
 
-      # 步骤 5: 清理认证信息 (现在是第5步)
+      # Step 5: Clean up Git credentials (now step 5)
       - name: Clean up Git credentials
         if: always()
         run: |
           git config --global --unset-all "http.${{ gitea.server_url }}.extraheader"
 
-      # 步骤 6: 镜像推送到 GitHub (已修正)
-      # 我们使用新的 G_ 前缀密钥，并移除不必要的 env 块
+      # Step 6: Mirror push to GitHub (corrected)
       - name: Push to GitHub Mirror
         env:
-          # 将密钥作为环境变量传入，避免在命令行中暴露
+          # Pass secrets as environment variables to avoid exposing them in the command line
           G_GITHUB_USERNAME: ${{ secrets.G_GITHUB_USERNAME }}
           G_GITHUB_TOKEN: ${{ secrets.G_GITHUB_TOKEN }}
           G_GITHUB_REPO: ${{ secrets.G_GITHUB_REPO }}

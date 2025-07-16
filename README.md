@@ -194,5 +194,5 @@ This project is licensed under the **Mozilla Public License 2.0**. A copy of the
 
 ### Third-Party Licenses
 
-This project incorporates components from other open source projects. The original licenses for these components are detailed in the [`NOTICE`](NOTICE) file and the licenses themselves can be found in the [`LICENSES/`](LICENSES/) directory.
+This project incorporates components from other open source projects. The original licenses for these components can be found in the [`LICENSES/`](LICENSES/) directory.
 

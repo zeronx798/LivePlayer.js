@@ -1,20 +1,20 @@
-# 工作流名称
+# Workflow Name
 name: Create Dev Release on Push
 
-# 工作流触发器：当推送到 main 分支时触发
+# Workflow Trigger: Triggers when pushing to the main branch
 on:
   push:
     branches:
-      - main  # 进行开发构建的分支
+      - main  # Branch for development builds
 
-# 定义一个名为 'build-and-release' 的任务
+# Define a job named 'build-and-release'
 jobs:
   build-and-release:
-    # 指定运行此任务的 Runner。确保这里的标签与注册 Runner 时使用的标签一致
-    runs-on: linux-amd64 # Runner 标签
+    # Specify the runner for this job. Ensure the tag here matches the tag used when registering the runner
+    runs-on: linux-amd64 # Runner Tag
     steps:
       # ----------------------------------------------------------------------
-      # 步骤 1: 调试 - 打印关键的 Gitea 变量 (可选，但推荐保留)
+      # Step 1: Debug - Print key Gitea variables (Optional, but recommended to keep)
       # ----------------------------------------------------------------------
       - name: Debug Gitea Context Variables
         run: |
@@ -22,7 +22,7 @@ jobs:
           echo "Gitea SHA: ${{ gitea.sha }}"
 
       # ----------------------------------------------------------------------
-      # 步骤 2: 配置 Git 认证
+      # Step 2: Configure Git Authentication
       # ----------------------------------------------------------------------
       - name: Configure Git for checkout
         run: |
@@ -32,14 +32,14 @@ jobs:
           git config --global --add safe.directory "${{ gitea.workspace }}"
       
       # ----------------------------------------------------------------------
-      # 步骤 3: 检出代码
+      # Step 3: Checkout Code
       # ----------------------------------------------------------------------
       - name: Checkout repository
         run: |
           git clone --depth 1 --branch ${{ gitea.ref_name }} "${{ gitea.server_url }}/${{ gitea.repository }}.git" .
 
       # ----------------------------------------------------------------------
-      # 步骤 4: 清理认证信息 (这是一个良好的安全习惯)
+      # Step 4: Clean up authentication information (This is a good security practice)
       # ----------------------------------------------------------------------
       - name: Clean up Git credentials
         if: always()
@@ -47,7 +47,7 @@ jobs:
           git config --global --unset-all "http.${{ gitea.server_url }}.extraheader"
 
       # ----------------------------------------------------------------------
-      # 步骤 5: 设置 Node.js 环境
+      # Step 5: Set up Node.js Environment
       # ----------------------------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -56,7 +56,7 @@ jobs:
           cache: 'npm'
 
       # ----------------------------------------------------------------------
-      # 步骤 6: 安装依赖并构建项目
+      # Step 6: Install Dependencies and Build the Project
       # ----------------------------------------------------------------------
       - name: Install dependencies and build
         run: |
@@ -64,7 +64,7 @@ jobs:
           npm run build
 
       # ----------------------------------------------------------------------
-      # 步骤 7: 准备版本信息和发布产物
+      # Step 7: Prepare Release Information and Artifacts
       # ----------------------------------------------------------------------
       - name: Prepare release assets
         id: prepare_assets
@@ -74,11 +74,11 @@ jobs:
           (cd dist && zip -r "../liveplayer.zip" .)
 
       # ----------------------------------------------------------------------
-      # 新增步骤 8: 分析提交信息以确定发布类型
-      # 1. 检查提交信息是否符合版本号格式 (e.g., 1.2.3, 4.5.6-rc.1, 7.8.9-SNAPSHOT)
-      #    正则表达式匹配 X.Y.Z 或 X.Y.Z-suffix 格式
-      # 2. 如果是版本号，设置 IS_VERSION_COMMIT=true 和发布的详细信息
-      # 3. 如果不是，设置 IS_VERSION_COMMIT=false，以触发后续的开发构建流程
+      # New Step 8: Analyze Commit Message to Determine Release Type
+      # 1. Check if the commit message matches the version number format (e.g., 1.2.3, 4.5.6-rc.1, 7.8.9-SNAPSHOT)
+      #    Regular expression matches X.Y.Z or X.Y.Z-suffix format
+      # 2. If it is a version number, set IS_VERSION_COMMIT=true and the release details
+      # 3. If not, set IS_VERSION_COMMIT=false to trigger the subsequent development build process
       # ----------------------------------------------------------------------
       - name: Analyze Commit Message for Versioning
         id: commit_analyzer
@@ -109,8 +109,8 @@ jobs:
           fi
 
       # ------------------------------------------------------------------
-      # 步骤 9A: 如果是版本号提交，则创建正式版、RC版或快照版 Release
-      # 此步骤仅在 env.IS_VERSION_COMMIT == 'true' 时运行
+      # Step 9A: If it's a version number commit, create a Full, RC, or Snapshot Release
+      # This step only runs when env.IS_VERSION_COMMIT == 'true'
       # ------------------------------------------------------------------
       - name: Create Versioned Release (if applicable)
         id: create_versioned_release
@@ -148,11 +148,11 @@ jobs:
           echo "UPLOAD_URL=${UPLOAD_URL}" >> $GITEA_ENV
 
       # ------------------------------------------------------------------
-      # 步骤 9B: 如果不是版本号提交，则创建开发版 Release (保留原有行为)
-      # 此步骤仅在 env.IS_VERSION_COMMIT == 'false' 时运行
+      # Step 9B: If it's not a version number commit, create a Dev Release (retains original behavior)
+      # This step only runs when env.IS_VERSION_COMMIT == 'false'
       # ------------------------------------------------------------------
       - name: Create Dev Release (if not a version commit)
-        id: create_dev_release # 更改ID以避免冲突
+        id: create_dev_release # Changed ID to avoid conflict
         if: env.IS_VERSION_COMMIT == 'false'
         run: |
           COMMIT_MSG_FROM_GIT=$(git log -1 --pretty=%B "${{ gitea.sha }}")
@@ -185,9 +185,9 @@ jobs:
           echo "UPLOAD_URL=${UPLOAD_URL}" >> $GITEA_ENV
 
       # ------------------------------------------------------------------
-      # 步骤 10: 上传附件到创建好的 Release
-      # 1. 动态获取步骤 9A 或 9B 中生成的 UPLOAD_URL
-      # 2. 上传所有产物
+      # Step 10: Upload attachments to the created Release
+      # 1. Dynamically get the UPLOAD_URL generated in Step 9A or 9B
+      # 2. Upload all artifacts
       # ------------------------------------------------------------------
       - name: Upload Release Assets via API
         run: |
