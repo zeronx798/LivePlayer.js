@@ -5,15 +5,15 @@
 
 /**
  * @file liveplayer.js
- * @description A self-contained, zero-dependency and configurable FLV and HLS live player component.
- * @version 1.0.0-SNAPSHOT
+ * @description A self-contained and configurable FLV and HLS live player component with intelligent offline detection.
+ * @version __LIVEPLAYER_VERSION__
  */
 
 import flvjs from 'flv.js';
 import Hls from 'hls.js';
 
 /**
- * Represents a configurable FLV live player component.
+ * Represents a configurable live player component.
  * It handles stream playback, UI controls, error recovery, and optional debug logging.
  */
 export default class LivePlayer {
@@ -31,6 +31,12 @@ export default class LivePlayer {
      * @param {number} [options.liveEdge.latency=5.0] The maximum allowed latency in seconds before seeking to the live edge.
      */
     constructor(element, options = {}) {
+        // Library load message
+        console.log(`%c LivePlayer v${LivePlayer.VERSION} %c https://github.com/zeronx798/LivePlayer.js`,
+            'color: #ffffff; background: #007bff; padding: 2px 5px; border-radius: 3px;',
+            'color: #007bff; background: #efefef; padding: 2px 5px; border-radius: 3px;'
+        );
+
         if (!element) throw new Error("A container element must be provided.");
 
         this.container = element;
@@ -154,6 +160,22 @@ export default class LivePlayer {
             this.displayError(error.message);
             this.log(error.message, 'error');
         }
+    }
+
+    /**
+     * The current version of the LivePlayer library.
+     * This is automatically injected during the build process.
+     * @type {string}
+     * @static
+     */
+    static VERSION = '__LIVEPLAYER_VERSION__';
+
+    /**
+     * Gets the current version of the player instance.
+     * @returns {string} Version number.
+     */
+    getVersion() {
+        return LivePlayer.VERSION;
     }
 
     /**

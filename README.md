@@ -1,6 +1,6 @@
 # LivePlayer.js
 
-A self-contained, zero-dependency, and configurable FLV and HLS live player component with intelligent offline detection.
+A self-contained and configurable FLV and HLS live player component with intelligent offline detection.
 
 LivePlayer.js provides a robust solution for embedding live video streams into your web pages. It intelligently handles both FLV and HLS formats, with automatic fallback and recovery mechanisms. Its standout feature is the ability to accurately determine when a stream has truly ended, preventing the common infinite-loading loop and providing a superior user experience.
 

@@ -13,6 +13,10 @@ const fs = require('fs-extra');
 const path = require('path');
 const { minify: minifyHtml } = require('html-minifier-terser');
 const csso = require('csso');
+const { version } = require('./package.json');
+if (!version) {
+    throw new Error('Version not found in package.json');
+}
 
 const isDevBuild = process.argv.includes('--dev');
 const srcDir = path.join(__dirname, 'src');
@@ -40,6 +44,9 @@ async function build() {
         let jsContent = await fs.readFile(path.join(srcDir, 'LivePlayer.js'), 'utf8');
         // Use more robust replacement method to handle special characters in template strings
         jsContent = jsContent.replace('`__PLAYER_TEMPLATE_HTML__`', `\`${minifiedHtml.replace(/`/g, '\\`')}\``);
+        // replace version string
+        jsContent = jsContent.replaceAll('__LIVEPLAYER_VERSION__', version);
+        console.log(`Injected version number: ${version}`);
 
         const tempJsPath = path.join(tempDir, 'LivePlayer.temp.js');
         await fs.writeFile(tempJsPath, jsContent);
@@ -64,8 +71,10 @@ async function build() {
             format: 'umd',
             name: 'LivePlayer',
             banner: `/*!
+ * LivePlayer.js v${version}
  * SPDX-FileCopyrightText: 2025 The LivePlayer Project Authors
  * SPDX-License-Identifier: MPL-2.0
+ * https://github.com/zeronx798/LivePlayer.js
  */`,
             sourcemap: true,
             globals: {
@@ -78,8 +87,10 @@ async function build() {
             file: path.join(distDir, 'liveplayer.esm.js'),
             format: 'esm',
             banner: `/*!
+ * LivePlayer.js v${version}
  * SPDX-FileCopyrightText: 2025 The LivePlayer Project Authors
  * SPDX-License-Identifier: MPL-2.0
+ * https://github.com/zeronx798/LivePlayer.js
  */`,
             sourcemap: true
         };
