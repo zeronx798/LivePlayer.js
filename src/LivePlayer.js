@@ -32,9 +32,10 @@ export default class LivePlayer {
      */
     constructor(element, options = {}) {
         // Library load message
-        console.log(`%c LivePlayer v${LivePlayer.VERSION} %c https://github.com/zeronx798/LivePlayer.js`,
-            'color: #ffffff; background: #007bff; padding: 2px 5px; border-radius: 3px;',
-            'color: #007bff; background: #efefef; padding: 2px 5px; border-radius: 3px;'
+        console.log(`%c LivePlayer v${LivePlayer.VERSION} %c https://github.com/zeronx798/LivePlayer.js %c`,
+            'color: #ffffff; background: #5B64B3; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
+            'color: #333333; background: #000000; padding: 2px 5px; border-radius: 3px;',
+            'color: inherit; background: inherit;'
         );
 
         if (!element) throw new Error("A container element must be provided.");
@@ -234,14 +235,14 @@ export default class LivePlayer {
             if (typeof value === 'string') {
                 // Simple format
                 return { name, url: value, fallback: null };
-            } else if (typeof value === 'object' && value !== null && value.url) {
+            } if (typeof value === 'object' && value !== null && value.url) {
                 // Advanced format with fallback
                 return { name, url: value.url, fallback: value.fallback || null };
-            } else {
+            } 
                 // Invalid format for this entry
                 this.log(`Invalid stream format for line: "${name}". Entry skipped.`, 'warn', { entry: value });
                 return null;
-            }
+            
         }).filter(Boolean); // Filter out any null (invalid) entries
 
         if (urls.length === 0) {
@@ -259,7 +260,7 @@ export default class LivePlayer {
     injectHTML() {
         const logHTML = this.options.debugUI ? `<textarea class="log-output" readonly></textarea>` : '';
         this.container.classList.add('live-player-component');
-        this.container.innerHTML = `__PLAYER_TEMPLATE_HTML__` + logHTML;
+        this.container.innerHTML = `__PLAYER_TEMPLATE_HTML__${  logHTML}`;
     }
 
     /**
@@ -560,7 +561,7 @@ export default class LivePlayer {
         this.flvPlayer = flvjs.createPlayer({
             type: "flv",
             isLive: true,
-            url: url,
+            url,
         }, {
             enableStashBuffer: false
         });
