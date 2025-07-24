@@ -35,18 +35,18 @@ Add the library's CSS, its dependencies (`Font Awesome`, `flv.js`, `hls.js`), an
     <meta charset="UTF-8">
     <title>LivePlayer Example</title>
     <!-- 1. Font Awesome for Icons -->
-    <link rel="stylesheet" href="path/to/font-awesome/css/all.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.2/css/all.min.css">
     <!-- 2. LivePlayer CSS -->
-    <link rel="stylesheet" href="path/to/liveplayer/dist/liveplayer.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@zeronx/liveplayer@latest/dist/liveplayer.min.css">
 </head>
 <body>
     <div id="player-container" style="width: 800px; height: 450px;"></div>
 
     <!-- 3. Core Dependencies -->
-    <script src="path/to/flv.js/dist/flv.min.js"></script>
-    <script src="path/to/hls.js/dist/hls.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flv.js@1.6.2/dist/flv.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
     <!-- 4. LivePlayer Library (UMD version) -->
-    <script src="path/to/liveplayer/dist/liveplayer.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@zeronx/liveplayer@latest/dist/liveplayer.umd.min.js"></script>
 
     <!-- 5. Your initialization script -->
     <script>
